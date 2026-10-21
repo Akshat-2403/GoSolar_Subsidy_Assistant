@@ -188,6 +188,7 @@ def get_workflow(workflow_id: str) -> WorkflowResponse | None:
 
 
 def submit_workflow(
+        
     workflow_id: str,
     human_approved: bool,
 ) -> WorkflowResponse:
@@ -206,10 +207,11 @@ def submit_workflow(
 
     # This is a simulated submission for the hackathon, not a government portal.
     # TC2 can proceed only through this explicitly approved mock-review path.
-    if workflow.state not in ("draft_application_ready", "vendor_warning"):
+    if workflow.state != "draft_application_ready":
         raise ValueError(
             f"Workflow state '{workflow.state}' cannot be mock-submitted. "
-            "Resolve consent, eligibility blockers, and missing documents first."
+            "Resolve all eligibility issues, missing documents, and consent "
+        "requirements before submission."
         )
 
     submitted = workflow.model_copy(
