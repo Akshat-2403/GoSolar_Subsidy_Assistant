@@ -3,6 +3,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.applications import router as applications_router
+from app.api.workflow import router as workflows_router
+
 
 app = FastAPI(
     title="Rooftop Solar Subsidy Agent",
@@ -22,6 +24,7 @@ app.add_middleware(
 )
 
 app.include_router(applications_router)
+app.include_router(workflows_router)
 
 
 @app.get("/")
