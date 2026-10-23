@@ -4,11 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.applications import router as applications_router
+from app.api.mock_discom import router as mock_discom_router
 from app.api.workflow import router as workflows_router
 
 
 app = FastAPI(
-    title="Rooftop Solar Subsidy Agent",
+    title="GoSolar API",
     description="Policy-aware demo API for rooftop solar application evaluation.",
     version="0.2.0",
 )
@@ -31,12 +32,13 @@ app.add_middleware(
 )
 
 app.include_router(applications_router)
+app.include_router(mock_discom_router)
 app.include_router(workflows_router)
 
 
 @app.get("/")
 def root():
-    return {"message": "Rooftop Solar Subsidy Agent API", "status": "running"}
+    return {"message": "GoSolar API", "status": "running"}
 
 
 @app.get("/health")

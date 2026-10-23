@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 app = FastAPI(
-    title="Rooftop Solar Mock DISCOM Portal",
+    title="GoSolar Mock DISCOM Portal",
     description="Standalone simulated net-metering application portal.",
     version="0.1.0",
 )
@@ -45,7 +45,7 @@ button{margin-top:20px;padding:12px 18px;border:0;border-radius:7px;background:#
 small{color:#6d7c70;line-height:1.6}.tag{color:#277248;font-weight:700}
 #result{margin-top:16px;padding:12px;background:#edf7ef;border-radius:7px;display:none}
 @media(max-width:760px){main{grid-template-columns:1fr}}
-</style></head><body><header><strong>State DISCOM · Rooftop Solar Applications</strong><div>Net metering and subsidy registration</div></header>
+</style></head><body><header><strong>GoSolar · Mock DISCOM Portal</strong><div>Net metering and subsidy registration</div></header>
 <main><section class="card"><span class="tag">NEW APPLICATION</span><h1>Rooftop solar registration</h1>
 <p>Submit a simulated application for the demonstration portal.</p>
 <form id="portal-form">
@@ -92,4 +92,3 @@ def read_application(application_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="Application not found.")
     return record
-

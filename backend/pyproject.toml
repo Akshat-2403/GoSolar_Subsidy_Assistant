@@ -1,7 +1,7 @@
 [project]
-name = "rooftop-solar-subsidy-agent"
+name = "gosolar"
 version = "0.1.0"
-description = "Backend for the Rooftop Solar Subsidy Agent"
+description = "GoSolar rooftop solar subsidy assistant backend"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.115",

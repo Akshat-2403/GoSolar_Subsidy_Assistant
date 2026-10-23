@@ -48,7 +48,7 @@ Copy-Item .env.example .env.local
 npm run dev
 ~~~
 
-The frontend uses VITE_API_BASE_URL and VITE_PORTAL_URL from .env.local. VITE_API_URL remains supported for existing configurations. Defaults target localhost ports 8000 and 8001.
+The frontend uses VITE_API_BASE_URL and VITE_PORTAL_URL from .env.local. VITE_API_URL remains supported for existing configurations. The browser-facing portal defaults to the same-origin `/api/mock-discom/portal` route; `MOCK_PORTAL_URL` is a server-side setting for the backend-to-portal connection.
 
 ## Tests and build checks
 
@@ -105,4 +105,3 @@ VITE_* values are included in the browser bundle; put no secrets in them. The de
 - MOCK_PORTAL_FAIL_STATUS=503 makes the portal return a maintenance error for retry-path demonstrations.
 - The standalone portal generates synthetic APP-SOL-2026-XXXXX IDs only.
 - OCR, Supabase persistence, CAPTCHA solving, and real government submission are not implemented. RAG cites official published source passages; verify their currentness and applicability before making eligibility or filing decisions.
-
