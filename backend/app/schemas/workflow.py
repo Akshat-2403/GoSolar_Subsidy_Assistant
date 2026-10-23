@@ -1,4 +1,4 @@
-﻿from typing import Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -43,6 +43,10 @@ class WorkflowRequest(BaseModel):
 
 
 class EvidenceRecord(BaseModel):
+    evidence_id: str
+    rule_applied: str
+    source_title: str
+    verbatim_snippet: str
     rule: str
     outcome: str
     source_url: str | None = None
@@ -77,5 +81,4 @@ class WorkflowResponse(BaseModel):
     events: list[WorkflowEvent] = Field(default_factory=list)
     financial_summary: FinancialSummary | None = None
     application_id: str | None = None
-
-
+    policy_assessment: str | None = None

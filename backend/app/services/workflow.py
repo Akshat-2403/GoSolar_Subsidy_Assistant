@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import time
 import urllib.error
@@ -106,7 +106,17 @@ def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> Workf
     evidence: list[EvidenceRecord] = []
 
     def record(rule: str, outcome: str, excerpt: str) -> None:
-        evidence.append(EvidenceRecord(rule=rule, outcome=outcome, source_url=None, excerpt=excerpt, checked_at=_now()))
+        evidence.append(EvidenceRecord(
+            evidence_id=f"{workflow_id}-input-{len(evidence) + 1}",
+            rule_applied=rule,
+            source_title="Applicant-provided declaration / input",
+            verbatim_snippet=excerpt,
+            rule=rule,
+            outcome=outcome,
+            source_url=None,
+            excerpt=excerpt,
+            checked_at=_now(),
+        ))
 
     record("input_validation", "passed", "Request fields passed Pydantic validation.")
     if not request.owns_rooftop:

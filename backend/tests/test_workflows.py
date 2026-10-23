@@ -1,4 +1,4 @@
-﻿from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from app.main import app
 from app.portal.mock_portal import app as portal_app
@@ -41,6 +41,14 @@ def test_valid_workflow_waits_at_human_review_and_calculates():
     assert data["financial_summary"]["estimated_subsidy_inr"] == 78000
     assert any(event["node"] == "human_review" and event["status"] == "waiting" for event in data["events"])
 
+
+def test_policy_evidence_has_citations_before_human_gate():
+    data = evaluate()
+    evidence = [item for item in data["evidence_log"] if item["source_url"]]
+    assert any(item["rule_applied"] == "pm_surya_ghar_cfa" for item in evidence)
+    assert any(item["rule_applied"] == "discom_connectivity" for item in evidence)
+    assert all(item["evidence_id"] and item["source_title"] and item["verbatim_snippet"] for item in evidence)
+    assert any(event["node"] == "policy_evidence" for event in data["events"])
 
 def test_tenant_without_noc_is_blocked():
     data = evaluate(applicant_type="tenant")
