@@ -42,6 +42,20 @@ def test_valid_workflow_waits_at_human_review_and_calculates():
     assert any(event["node"] == "human_review" and event["status"] == "waiting" for event in data["events"])
 
 
+def test_health_alias_and_offline_policy_mode(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    from app.rag.retriever import policy_reasoning, retrieve_policy_evidence
+
+    assert client.get("/health").json() == {"status": "healthy"}
+    assert client.get("/api/health").json() == {"status": "healthy"}
+    evidence = retrieve_policy_evidence(
+        "residential PM Surya Ghar CFA",
+        rule_applied="offline_test",
+        source_ids={"mnre-pmsg"},
+    )
+    assert evidence and evidence[0]["source_url"].startswith("https://")
+    assert "Offline policy retrieval" in policy_reasoning("test query", evidence)
+
 def test_policy_evidence_has_citations_before_human_gate():
     data = evaluate()
     evidence = [item for item in data["evidence_log"] if item["source_url"]]

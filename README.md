@@ -10,7 +10,7 @@ This is a demo, not a government service. It does not verify real DISCOM/vendor 
 - backend/: FastAPI API and LangGraph workflow.
 - backend/app/portal/mock_portal.py: independently runnable simulated portal and REST API.
 
-The LangGraph workflow validates the request, calculates an indicative estimate, retrieves source passages from MNRE and MSEDCL policy material through a lightweight in-memory cosine index using LangChain documents and embeddings, pauses at a checkpointed human review interrupt, and resumes to submit the approved payload. Set OPENAI_API_KEY to use OpenAI embeddings and a grounded ChatOpenAI assessment; without it, the app uses a local in-memory token-vector fallback and does not make LLM claims. Set POLICY_REFRESH_SOURCES=true to fetch the official source URLs before indexing. The checkpointer and workflow store are in memory for the single-process demo; workflow state is lost on restart.
+The LangGraph workflow validates the request, calculates an indicative estimate, retrieves source passages from MNRE and MSEDCL policy material through a lightweight in-memory cosine index using LangChain documents and embeddings, pauses at a checkpointed human review interrupt, and resumes to submit the approved payload. The evidence index always uses local token vectors and makes no embedding API calls. Set GEMINI_API_KEY to enable the optional Gemini free-tier assessment (GEMINI_MODEL defaults to gemini-3.5-flash-lite); leave it blank for fully offline operation. The checkpointer and workflow store are in memory for the single-process demo; workflow state is lost on restart.
 
 The portal driver uses REST when MOCK_PORTAL_URL is configured, retries transient service failures up to three times, and leaves failed approved submissions in a retryable queue. Without that variable, the backend uses the same portal validation locally for single-process development.
 
@@ -77,7 +77,7 @@ The compose file runs the API on port 8000 and the standalone mock portal on por
 
 ## Cloud demo deployment
 
-1. Deploy backend/ as a Render Docker web service using backend/Dockerfile. Set OPENAI_API_KEY, CORS_ORIGINS to any custom frontend origin, and POLICY_REFRESH_SOURCES=true if you want to refresh the baseline corpus from official URLs. Vercel preview origins ending in .vercel.app are allowed by the API.
+1. Deploy backend/ as a Render Docker web service using backend/Dockerfile. Optionally set GEMINI_API_KEY for Gemini free-tier policy assessment. No embedding key is needed. Set CORS_ORIGINS to any custom frontend origin. Vercel preview origins ending in .vercel.app are allowed by the API.
 2. Deploy a second Render Docker service from the same backend/Dockerfile, with the start command: uvicorn app.portal.mock_portal:app --host 0.0.0.0 --port $PORT.
 3. Set MOCK_PORTAL_URL on the API service to the portal service's HTTPS origin.
 4. Deploy frontend/ to Vercel with build command npm run build, output directory dist, and environment values VITE_API_BASE_URL=https://your-agent-api.onrender.com and VITE_PORTAL_URL=https://your-mock-portal.onrender.com.
@@ -95,7 +95,8 @@ VITE_* values are included in the browser bundle; put no secrets in them. The de
 | GET | /api/workflows/{workflow_id}/events | Replay workflow events as SSE |
 | POST | /api/workflows/{workflow_id}/approve | Resume LangGraph after explicit approval |
 | POST | /api/workflows/{workflow_id}/submit | Backward-compatible approval route |
-| GET | /api/health | Health check |
+| GET | /health | Health check
+| GET | /api/health | Health check alias |
 
 ## Demonstration behavior and limits
 

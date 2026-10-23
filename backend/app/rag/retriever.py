@@ -1,14 +1,9 @@
-"""Policy source ingestion and semantic retrieval.
-
-Official source PDFs/pages are fetched on first use, chunked, embedded with OpenAI,
-and indexed in a lightweight in-memory cosine vector store using LangChain document and embedding interfaces. A small exact-source
-corpus keeps local demos usable when the provider key or network is unavailable.
-"""
+"""Offline policy retrieval and optional free-tier Gemini policy assessment."""
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-import urllib.request
 from functools import lru_cache
 from typing import Any
 
@@ -16,6 +11,8 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 
+# Curated baseline passages from the official sources below. The index is rebuilt
+# locally at process start and never makes embedding or vector-store API calls.
 SOURCES = [
     {
         "id": "mnre-pmsg",
@@ -53,32 +50,20 @@ SOURCES = [
             "reckoned based on its output capacity in AC."
         ),
     },
-    {
-        "id": "msedcl-portal",
-        "title": "MSEDCL Rooftop Net Metering consumer guidance",
-        "url": "https://www.mahadiscom.in/en/consumer/re-rooftop-net-metering/",
-        "text": (
-            "RE Rooftop Net Metering. General Guidelines for the consumers desiring connectivity of "
-            "Roof-top Renewable Energy Generating System with MSEDCL's Network under MERC Net Metering "
-            "Regulations, 2015. ANNEXURE-1 Procedure for Net Metering."
-        ),
-    },
 ]
 
 
 class HashEmbeddings(Embeddings):
-    """Offline deterministic token-vector fallback; OpenAI embeddings are preferred."""
+    """Deterministic local token vectors; no model download, network, or API cost."""
+
     def __init__(self, dimensions: int = 384):
         self.dimensions = dimensions
 
     def _embed(self, text: str) -> list[float]:
-        import hashlib
         vector = [0.0] * self.dimensions
-        tokens = re.findall(r"[a-z0-9]+", text.casefold())
-        for token in tokens:
+        for token in re.findall(r"[a-z0-9]+", text.casefold()):
             digest = hashlib.blake2b(token.encode(), digest_size=8).digest()
-            index = int.from_bytes(digest, "big") % self.dimensions
-            vector[index] += 1.0
+            vector[int.from_bytes(digest, "big") % self.dimensions] += 1.0
         norm = sum(value * value for value in vector) ** 0.5 or 1.0
         return [value / norm for value in vector]
 
@@ -96,42 +81,6 @@ def _split(text: str, size: int = 900, overlap: int = 120) -> list[str]:
     return [clean[start:start + size] for start in range(0, len(clean), size - overlap)]
 
 
-def _download_source(source: dict[str, str]) -> list[Document]:
-    """Best-effort refresh from official URL; preserve cited snippets in offline mode."""
-    text = source["text"]
-    try:
-        request = urllib.request.Request(source["url"], headers={"User-Agent": "RooftopSolarPolicyAssistant/1.0"})
-        with urllib.request.urlopen(request, timeout=8) as response:
-            raw = response.read(12_000_000)
-        if raw.startswith(b"%PDF"):
-            from pypdf import PdfReader
-            import io
-            extracted = " ".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(raw)).pages)
-            if extracted.strip():
-                text = extracted
-        elif b"<html" in raw[:2048].lower() or b"<!doctype" in raw[:2048].lower():
-            from html.parser import HTMLParser
-            class TextExtractor(HTMLParser):
-                def __init__(self):
-                    super().__init__(); self.parts: list[str] = []
-                def handle_data(self, data: str) -> None:
-                    if data.strip(): self.parts.append(data.strip())
-            parser = TextExtractor()
-            parser.feed(raw.decode("utf-8", errors="ignore"))
-            extracted = " ".join(parser.parts)
-            if extracted.strip():
-                text = extracted
-    except Exception:
-        pass
-    return [
-        Document(page_content=chunk, metadata={
-            "source_id": source["id"], "source_title": source["title"],
-            "source_url": source["url"], "chunk_index": index,
-        })
-        for index, chunk in enumerate(_split(text))
-    ]
-
-
 class PolicyInMemoryVectorStore:
     def __init__(self, documents: list[Document], embeddings: Embeddings):
         self.embeddings = embeddings
@@ -146,44 +95,46 @@ class PolicyInMemoryVectorStore:
 
     def similarity_search(self, query: str, k: int = 4) -> list[Document]:
         query_vector = self.embeddings.embed_query(query)
-        ranked = sorted(self.rows, key=lambda row: self._cosine(query_vector, row[1]), reverse=True)
+        ranked = sorted(
+            self.rows,
+            key=lambda row: self._cosine(query_vector, row[1]),
+            reverse=True,
+        )
         return [doc for doc, _vector in ranked[:k]]
 
 
 @lru_cache(maxsize=1)
 def _store() -> PolicyInMemoryVectorStore:
-    refresh = os.getenv("POLICY_REFRESH_SOURCES", "false").casefold() == "true"
-    documents = []
-    for source in SOURCES:
-        if refresh:
-            documents.extend(_download_source(source))
-        else:
-            documents.extend(
-                Document(page_content=chunk, metadata={
-                    "source_id": source["id"], "source_title": source["title"],
-                    "source_url": source["url"], "chunk_index": index,
-                })
-                for index, chunk in enumerate(_split(source["text"]))
-            )
-    if os.getenv("OPENAI_API_KEY"):
-        from langchain_openai import OpenAIEmbeddings
-        embeddings: Embeddings = OpenAIEmbeddings(
-            model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    documents = [
+        Document(
+            page_content=chunk,
+            metadata={
+                "source_id": source["id"],
+                "source_title": source["title"],
+                "source_url": source["url"],
+                "chunk_index": index,
+            },
         )
-    else:
-        embeddings = HashEmbeddings()
-    return PolicyInMemoryVectorStore(documents, embeddings)
+        for source in SOURCES
+        for index, chunk in enumerate(_split(source["text"]))
+    ]
+    return PolicyInMemoryVectorStore(documents, HashEmbeddings())
 
 
-def retrieve_policy_evidence(query: str, *, rule_applied: str, k: int = 2, source_ids: set[str] | None = None) -> list[dict[str, Any]]:
-    """Return source-grounded records with a snippet copied verbatim from indexed text."""
+def retrieve_policy_evidence(
+    query: str,
+    *,
+    rule_applied: str,
+    k: int = 2,
+    source_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return locally retrieved records with source metadata and text snippets."""
     store = _store()
     matches = store.similarity_search(query, k=len(store.rows))
     if source_ids:
         matches = [doc for doc in matches if doc.metadata["source_id"] in source_ids]
-    matches = matches[:k]
     evidence = []
-    for index, doc in enumerate(matches):
+    for index, doc in enumerate(matches[:k]):
         snippet = re.sub(r"\s+", " ", doc.page_content).strip()[:700]
         evidence.append({
             "evidence_id": f"{doc.metadata['source_id']}-{doc.metadata['chunk_index']}-{index}",
@@ -196,24 +147,31 @@ def retrieve_policy_evidence(query: str, *, rule_applied: str, k: int = 2, sourc
 
 
 def policy_reasoning(query: str, evidence: list[dict[str, Any]]) -> str:
-    """Use the configured LangChain chat model when credentials are present."""
-    if not os.getenv("OPENAI_API_KEY"):
-        return "Provider key not configured; policy evidence was retrieved using the local in-memory semantic index."
-    from langchain_openai import ChatOpenAI
+    """Use Gemini only when a key is explicitly provided; never call paid embeddings."""
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return (
+            "Offline policy retrieval completed. Add GEMINI_API_KEY to enable the optional "
+            "Gemini free-tier assessment; no external AI or embedding API was called."
+        )
+
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
     context = "\n\n".join(
-        f"Source: {item['source_title']} ({item['source_url']})\nVerbatim: {item['verbatim_snippet']}"
+        f"Source: {item['source_title']} ({item['source_url']})\n"
+        f"Retrieved passage: {item['verbatim_snippet']}"
         for item in evidence
     )
-    model = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+    model = ChatGoogleGenerativeAI(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        api_key=api_key,
         temperature=0,
-        timeout=20,
-        max_retries=1,
+        max_retries=0,
     )
     result = model.invoke(
-        "Assess the application question using only the cited evidence. "
-        "Do not invent policy rules or infer eligibility beyond the text. "
-        "State uncertainty and say when a human must verify. "
+        "Assess the application question using only the cited passages. Do not invent "
+        "rules or infer eligibility beyond the text. State uncertainty and require human "
+        "verification when the source does not resolve a point."
         f"\nQuestion: {query}\nEvidence:\n{context}"
     )
     return str(result.content)

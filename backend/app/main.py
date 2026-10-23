@@ -39,6 +39,7 @@ def root():
     return {"message": "Rooftop Solar Subsidy Agent API", "status": "running"}
 
 
+@app.get("/health")
 @app.get("/api/health")
 def health():
     return {"status": "healthy"}
