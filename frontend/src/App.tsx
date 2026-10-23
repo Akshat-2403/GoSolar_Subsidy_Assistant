@@ -1,8 +1,10 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import DashboardSummary from './components/DashboardSummary'
+import ApplicationTracker from './components/ApplicationTracker'
 import BillUpload from './components/BillUpload'
 import FinancialPlan from './components/FinancialPlan'
 import ProgressBar, { type WizardStep } from './components/ProgressBar'
+import RoofVisualizer from './components/RoofVisualizer'
 import SubsidyGuideModal from './components/SubsidyGuideModal'
 import discoms from './data/discoms.json'
 import { calculateSolarFinancials, type LoanTenureYears, type PurchaseMode } from './utils/calculations'
@@ -69,6 +71,7 @@ function App() {
   const [loanTenureYears, setLoanTenureYears] = useState<LoanTenureYears>(5)
   const [interestRatePct, setInterestRatePct] = useState(7)
   const [billUploadKey, setBillUploadKey] = useState(0)
+  const [currentView, setCurrentView] = useState<'assessment' | 'tracking'>('assessment')
   const activeWorkflowId = workflow?.workflow_id
   const stateNames = Object.keys(discoms).sort()
   const discomOptions = form.state ? discoms[form.state as keyof typeof discoms] ?? [] : []
@@ -219,12 +222,13 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">☼</div><div><strong>GoSolar<span>.</span></strong><small>SUBSIDY ASSISTANT</small></div></div>
       <div className="workspace-label">YOUR APPLICATION</div>
-      <nav className="nav-list"><button className="nav-item selected"><span className="nav-icon">▦</span>Solar assessment</button><button className="nav-item" onClick={startNew}><span className="nav-icon">↻</span>Start over</button></nav>
+      <nav className="nav-list"><button className={`nav-item ${currentView === 'assessment' ? 'selected' : ''}`} onClick={() => setCurrentView('assessment')}><span className="nav-icon">A</span>New assessment</button><button className={`nav-item ${currentView === 'tracking' ? 'selected' : ''}`} onClick={() => setCurrentView('tracking')}><span className="nav-icon">T</span>Track application</button><button className="nav-item" onClick={() => { startNew(); setCurrentView('assessment') }}><span className="nav-icon">R</span>Start over</button></nav>
       <div className="sidebar-bottom"><div className="system-card"><span className="status-dot" /><div><strong>Demo services</strong><small>Agent API · mock portal</small></div></div><div className="profile"><div className="avatar">GS</div><div><strong>GoSolar workspace</strong><small>Human approval enabled</small></div></div></div>
     </aside>
     <div className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>New solar assessment</div><div className="topbar-right"><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo</button><a className="button button-quiet" href={PORTAL_URL} target="_blank" rel="noreferrer">Open mock portal ↗</a></div></header>
+      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><a className="button button-quiet" href={PORTAL_URL} target="_blank" rel="noreferrer">Open mock portal</a></div></header>
       <main className="page-content">
+        {currentView === 'assessment' ? <>
         <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ROOFTOP SOLAR · PERSONALIZED ESTIMATE</div><h1>Plan your <span>solar journey</span></h1><p>Share a few details to explore your rooftop potential and available subsidy estimate.</p></div><button className="button button-outline" type="button" onClick={() => setGuide(true)}>Learn about subsidies</button></div>
         <ProgressBar activeStep={activeStep} />
         {error && <div className="notice notice-warning" role="alert"><span className="notice-symbol">!</span><span>{error}</span>{offlineAvailable && <button type="button" className="button button-quiet offline-action" onClick={() => { setOfflinePreview(true); setOfflineAvailable(false); setError('') }}>Continue in offline preview</button>}<button type="button" aria-label="Dismiss message" onClick={() => setError('')}>×</button></div>}
@@ -259,6 +263,7 @@ function App() {
                 <Field label="Installer / vendor ID"><input value={form.installer_id} onChange={(event) => update('installer_id', event.target.value)} placeholder="Installer registry ID" />{!form.installer_id.trim() && <small className="field-error">Enter the installer registry ID.</small>}</Field>
                 <Field label="Applicant type"><select value={form.applicant_type} onChange={(event) => update('applicant_type', event.target.value as Intake['applicant_type'])}><option value="owner">Owner</option><option value="tenant">Tenant</option></select></Field>
               </div>
+              <RoofVisualizer roofAreaSqft={form.roof_area_sqft} systemCapacityKw={estimatedSize} />
               <div className="form-section-title">PROJECT DETAILS</div>
               <label className="check-line"><input type="checkbox" checked={form.owns_rooftop} onChange={(event) => update('owns_rooftop', event.target.checked)} /> Rooftop ownership is established</label>
               <label className="check-line"><input type="checkbox" checked={form.has_grid_connection} onChange={(event) => update('has_grid_connection', event.target.checked)} /> Active grid connection</label>
@@ -298,6 +303,7 @@ function App() {
           </div>
         </div>
         <footer className="page-footer"><span>GoSolar · Demonstration only</span><span>Not a government service or eligibility determination</span></footer>
+        </> : <ApplicationTracker />}
       </main>
     </div>
     {review && workflow && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReview(false) }}><section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="modal-header"><div><div className="eyebrow">{offlinePreview ? 'OFFLINE PREVIEW' : 'HUMAN-IN-THE-LOOP GATE'}</div><h2 id="review-title">{offlinePreview ? 'Review local preview' : 'Review before portal submission'}</h2><p>{offlinePreview ? 'Completing this preview will not contact a backend or portal.' : 'Approval submits prepared data to the simulated portal.'}</p></div><button className="modal-close" aria-label="Close review" onClick={() => setReview(false)}>×</button></div><div className="review-banner"><span>✓</span><div><strong>{offlinePreview ? 'Local estimate is ready' : 'Application checks are ready'}</strong><p>This is a synthetic filing and does not create a government application.</p></div></div><div className="diff-grid"><div className="diff-card"><div className="diff-title">REVIEWED APPLICATION</div><dl>{Object.entries(workflow.application_parameters).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') || '—' : String(value)}</dd></div>)}</dl></div></div><div className="modal-foot"><button className="button button-quiet" onClick={() => setReview(false)}>Back to estimate</button><button className="button button-primary" disabled={busy} onClick={approve}>{busy ? 'Submitting…' : offlinePreview ? 'Complete local preview' : 'Approve and submit'} →</button></div></section></div>}
