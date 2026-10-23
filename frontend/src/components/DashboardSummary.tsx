@@ -1,43 +1,47 @@
+﻿import type { LoanTenureYears, PurchaseMode } from '../utils/calculations'
+import { calculateSolarFinancials } from '../utils/calculations'
+import FinancialPlan from './FinancialPlan'
 import './components.css'
 
 type Props = {
   monthlyUnits: number | ''
   tariffInrPerKwh: number | ''
   sanctionedLoadKw: number | ''
-  roofAreaSqft?: number | ''
+  roofAreaSqft: number | ''
+  proposedCapacityKw: number | ''
+  mode: PurchaseMode
+  tenureYears: LoanTenureYears
+  interestRatePct: number
+  onModeChange: (mode: PurchaseMode) => void
+  onTenureChange: (tenure: LoanTenureYears) => void
+  onInterestRateChange: (rate: number) => void
 }
 
-function formatInr(value: number) {
+function money(value: number) {
   return `₹${Math.round(value).toLocaleString('en-IN')}`
 }
 
-export default function DashboardSummary({ monthlyUnits, tariffInrPerKwh, sanctionedLoadKw, roofAreaSqft }: Props) {
-  const units = Number(monthlyUnits) > 0 ? Number(monthlyUnits) : 0
-  const tariff = Number(tariffInrPerKwh) > 0 ? Number(tariffInrPerKwh) : 0
-  const load = Number(sanctionedLoadKw) > 0 ? Number(sanctionedLoadKw) : 0
-  const roof = Number(roofAreaSqft) > 0 ? Number(roofAreaSqft) : 0
-  const hasSizingInputs = units > 0 && load > 0
-  // Approximate one kW of rooftop solar for every 120 monthly units, limited by sanctioned load.
-  const systemSizeKw = hasSizingInputs ? Math.min(load, units / 120, roof ? roof / 80 : Number.POSITIVE_INFINITY) : 0
-  const subsidyInr = Math.min(78000, Math.min(systemSizeKw, 2) * 30000 + Math.max(0, Math.min(systemSizeKw - 2, 1)) * 18000)
-  // Assumes solar offsets roughly 75% of annual consumption; local generation and tariffs vary.
-  const annualSavingsInr = units * 12 * tariff * 0.75
-  // Approximate grid emissions factor: 0.716 kg CO₂ per kWh of solar generation.
-  const annualCo2OffsetKg = systemSizeKw * 1400 * 0.716
-
+export default function DashboardSummary({ monthlyUnits, tariffInrPerKwh, sanctionedLoadKw, roofAreaSqft, proposedCapacityKw, mode, tenureYears, interestRatePct, onModeChange, onTenureChange, onInterestRateChange }: Props) {
+  const ready = Number(monthlyUnits) > 0 && Number(sanctionedLoadKw) > 0 && Number(tariffInrPerKwh) > 0
+  const estimate = ready ? calculateSolarFinancials({
+    monthlyUnits: Number(monthlyUnits), sanctionedLoadKw: Number(sanctionedLoadKw),
+    roofAreaSqft: Number(roofAreaSqft), proposedCapacityKw: Number(proposedCapacityKw),
+    tariffInrPerKwh: Number(tariffInrPerKwh),
+  }, interestRatePct, tenureYears) : null
   const metrics = [
-    { label: 'Recommended system size', value: hasSizingInputs ? `${systemSizeKw.toFixed(1)} kW` : '-- kW', note: 'Indicative sizing from usage and load' },
-    { label: 'Estimated subsidy', value: hasSizingInputs ? formatInr(subsidyInr) : '₹ --', note: 'Subject to scheme eligibility' },
-    { label: 'Estimated annual bill savings', value: hasSizingInputs && tariff > 0 ? formatInr(annualSavingsInr) : '₹ --', note: 'Indicative; depends on tariff and usage' },
-    { label: 'Estimated CO₂ offset', value: hasSizingInputs ? `${Math.round(annualCo2OffsetKg).toLocaleString('en-IN')} kg/yr` : '-- kg/yr', note: 'Approximate avoided grid emissions' },
+    { label: 'Recommended system size', value: estimate ? `${estimate.systemCapacityKw.toFixed(1)} kW` : '-- kW' },
+    { label: 'Estimated subsidy', value: estimate ? money(estimate.subsidyInr) : '₹ --' },
+    { label: 'Estimated annual bill savings', value: estimate ? money(estimate.annualBillSavingsInr) : '₹ --' },
+    { label: 'Estimated CO₂ offset', value: estimate ? `${estimate.annualCo2OffsetKg.toLocaleString('en-IN')} kg/yr` : '-- kg/yr' },
   ]
 
   return <aside className="dashboard-summary" aria-label="Live rooftop solar estimates" aria-live="polite">
-    <div className="dashboard-summary-heading"><p className="guide-eyebrow">LIVE ESTIMATE</p><h2>Your solar snapshot</h2><p>{hasSizingInputs ? 'Updates as you enter your details.' : 'Enter your monthly consumption and sanctioned load to see live estimates.'}</p></div>
+    <div className="dashboard-summary-heading"><p className="guide-eyebrow">LIVE ESTIMATE</p><h2>Your solar snapshot</h2><p>{estimate ? 'Updates as you enter your details.' : 'Enter your monthly consumption, sanctioned load, and tariff to see live estimates.'}</p></div>
     <dl className="dashboard-summary-metrics">
       {metrics.map((metric) => <div className="dashboard-summary-metric" key={metric.label}>
-        <dt>{metric.label}</dt><dd>{metric.value}</dd><small>{metric.note}</small>
+        <dt>{metric.label}</dt><dd>{metric.value}</dd>
       </div>)}
     </dl>
+    <FinancialPlan estimate={estimate} mode={mode} tenureYears={tenureYears} interestRatePct={interestRatePct} onModeChange={onModeChange} onTenureChange={onTenureChange} onInterestRateChange={onInterestRateChange} compact />
   </aside>
 }

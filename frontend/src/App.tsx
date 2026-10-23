@@ -1,13 +1,19 @@
-﻿import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import DashboardSummary from './components/DashboardSummary'
+import BillUpload from './components/BillUpload'
+import FinancialPlan from './components/FinancialPlan'
 import ProgressBar, { type WizardStep } from './components/ProgressBar'
 import SubsidyGuideModal from './components/SubsidyGuideModal'
 import discoms from './data/discoms.json'
+import { calculateSolarFinancials, type LoanTenureYears, type PurchaseMode } from './utils/calculations'
+import type { BillExtraction } from './utils/billParser'
+import { openFeasibilityProposal } from './utils/proposalExport'
 import { validateConsumerNumber, validateMobile, validatePincode, validatePositiveNumber, validateSanctionedLoad } from './utils/validation'
 import './App.css'
 
 const API_URL = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 const PORTAL_URL = import.meta.env.VITE_PORTAL_URL || '/api/mock-discom/portal'
+const BILL_OCR_URL = import.meta.env.VITE_BILL_OCR_URL || `${API_URL}/api/bills/parse`
 
 type EventItem = { node: string; status: string; message: string; timestamp: string }
 type Evidence = { evidence_id: string; rule_applied: string; source_title: string; verbatim_snippet: string; rule: string; outcome: string; excerpt: string; checked_at: string; source_url: string | null }
@@ -48,6 +54,7 @@ const workflowNodes = [
 ]
 
 function App() {
+  const localWorkflowId = useId()
   const [form, setForm] = useState<Intake>(defaults)
   const [workflow, setWorkflow] = useState<Workflow | null>(null)
   const [events, setEvents] = useState<EventItem[]>([])
@@ -58,6 +65,10 @@ function App() {
   const [activeStep, setActiveStep] = useState<WizardStep>(1)
   const [offlinePreview, setOfflinePreview] = useState(false)
   const [offlineAvailable, setOfflineAvailable] = useState(false)
+  const [purchaseMode, setPurchaseMode] = useState<PurchaseMode>('cash')
+  const [loanTenureYears, setLoanTenureYears] = useState<LoanTenureYears>(5)
+  const [interestRatePct, setInterestRatePct] = useState(7)
+  const [billUploadKey, setBillUploadKey] = useState(0)
   const activeWorkflowId = workflow?.workflow_id
   const stateNames = Object.keys(discoms).sort()
   const discomOptions = form.state ? discoms[form.state as keyof typeof discoms] ?? [] : []
@@ -93,15 +104,37 @@ function App() {
   }
   const stepOneValid = !validation.name && !validation.consumer && !validation.load && !validation.pin && !validation.mobile && !!form.state && !!form.discom_code
   const stepTwoValid = !validation.monthly && !validation.roof && !validation.capacity && !validation.tariff && !!form.installer_id.trim()
-  const estimatedSize = Math.max(0, Math.min(Number(form.sanctioned_load_kw) || 0, (Number(form.monthly_units) || 0) / 120, (Number(form.roof_area_sqft) || 0) / 80))
+  const financialEstimate = Number(form.monthly_units) > 0 && Number(form.sanctioned_load_kw) > 0 && Number(form.tariff_inr_per_kwh) > 0
+    ? calculateSolarFinancials({ monthlyUnits: Number(form.monthly_units), sanctionedLoadKw: Number(form.sanctioned_load_kw), roofAreaSqft: Number(form.roof_area_sqft), proposedCapacityKw: Number(form.proposed_capacity_kw), tariffInrPerKwh: Number(form.tariff_inr_per_kwh) }, interestRatePct, loanTenureYears)
+    : null
+  const estimatedSize = financialEstimate?.systemCapacityKw ?? 0
+
+  function applyBillExtraction(data: BillExtraction) {
+    setForm((current) => ({
+      ...current,
+      consumer_number: data.consumerNumber ?? current.consumer_number,
+      sanctioned_load_kw: data.sanctionedLoadKw ?? current.sanctioned_load_kw,
+      monthly_units: data.monthlyUnits ?? current.monthly_units,
+    }))
+  }
+
+  function downloadProposal() {
+    if (!financialEstimate) return
+    const opened = openFeasibilityProposal({
+      applicantName: form.applicant_name, consumerNumber: form.consumer_number,
+      state: form.state, discom: form.discom_code, roofAreaSqft: Number(form.roof_area_sqft),
+      estimate: financialEstimate, purchaseMode, loanTenureYears, interestRatePct,
+    })
+    if (!opened) setError('Your browser blocked the proposal window. Allow pop-ups for GoSolar and try again.')
+  }
 
   async function evaluate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!stepOneValid || !stepTwoValid) { setError('Complete all required fields in Steps 1 and 2 before evaluating.'); return }
     setError(''); setBusy(true)
     if (offlinePreview) {
-      const sizeKw = estimatedSize
-      const subsidyInr = Math.round(Math.min(78000, Math.min(sizeKw, 2) * 30000 + Math.max(0, Math.min(sizeKw - 2, 1)) * 18000))
+      const estimate = financialEstimate
+      if (!estimate) { setError('Complete the financial inputs before creating a preview.'); setBusy(false); return }
       const now = new Date().toISOString()
       const mockEvents: EventItem[] = [
         { node: 'validate_input', status: 'completed', message: 'Intake fields passed local preview checks.', timestamp: now },
@@ -110,14 +143,14 @@ function App() {
         { node: 'human_review', status: 'waiting', message: 'Review the preview before simulated submission.', timestamp: now },
       ]
       setWorkflow({
-        workflow_id: `LOCAL-${Date.now()}`, state: 'human_review_required', can_proceed: true,
+        workflow_id: `LOCAL-${localWorkflowId}`, state: 'human_review_required', can_proceed: true,
         human_approval_required: true, issues: [], missing_documents: [], application_parameters: { ...form },
         evidence_log: [], events: mockEvents,
         financial_summary: {
-          estimated_subsidy_inr: subsidyInr,
-          estimated_annual_generation_kwh: Math.round(sizeKw * 1400),
-          estimated_annual_savings_inr: Math.round(Number(form.monthly_units) * 12 * Number(form.tariff_inr_per_kwh) * 0.75),
-          estimated_payback_years: 0,
+          estimated_subsidy_inr: estimate.subsidyInr,
+          estimated_annual_generation_kwh: estimate.annualGenerationKwh,
+          estimated_annual_savings_inr: estimate.annualBillSavingsInr,
+          estimated_payback_years: estimate.cashPaybackYears,
         },
         application_id: null, policy_assessment: 'Offline preview estimate only. No backend, policy source, or portal was contacted.',
       })
@@ -174,10 +207,10 @@ function App() {
   }
   function useDemo() {
     setForm(demo); setWorkflow(null); setEvents([]); setError('')
-    setActiveStep(1); setOfflineAvailable(false)
+    setActiveStep(1); setOfflineAvailable(false); setBillUploadKey((key) => key + 1)
   }
   function startNew() {
-    setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setReview(false); setActiveStep(1)
+    setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setReview(false); setActiveStep(1); setBillUploadKey((key) => key + 1)
   }
   function continueFromStepOne() { if (stepOneValid) { setError(''); setActiveStep(2) } else setError('Please resolve the highlighted Step 1 fields before continuing.') }
   function continueFromStepTwo() { if (stepTwoValid) { setError(''); setActiveStep(3) } else setError('Please complete the required site and consumption fields.') }
@@ -202,6 +235,7 @@ function App() {
           <section className="panel wizard-panel">
             {activeStep === 1 && <>
               <PanelHeading kicker="STEP 01 · CONSUMER & DISCOM" title="Your electricity connection" subtitle="Enter the details shown on your latest electricity bill." icon="01" />
+              <BillUpload key={billUploadKey} endpoint={BILL_OCR_URL} onExtracted={applyBillExtraction} />
               <form onSubmit={(event) => { event.preventDefault(); continueFromStepOne() }} noValidate>
                 <Field label="Applicant name"><input autoComplete="name" value={form.applicant_name} onChange={(event) => update('applicant_name', event.target.value)} placeholder="e.g. Asha Sharma" aria-invalid={!!validation.name} />{form.applicant_name && validation.name && <small className="field-error">{validation.name}</small>}</Field>
                 <div className="form-grid">
@@ -237,6 +271,8 @@ function App() {
             {activeStep === 3 && <>
               <PanelHeading kicker="STEP 03 · SUBSIDY & VERIFICATION" title="Review your solar estimate" subtitle="Check your details and run the policy and financial assessment." icon="03" />
               <div className="review-details"><div><small>Applicant</small><strong>{form.applicant_name}</strong></div><div><small>State · DISCOM</small><strong>{form.state} · {form.discom_code}</strong></div><div><small>Consumer number</small><strong>{form.consumer_number}</strong></div><div><small>Usage · roof area</small><strong>{form.monthly_units} kWh/mo · {form.roof_area_sqft} sq. ft.</strong></div><div><small>Recommended system size</small><strong>{estimatedSize.toFixed(1)} kW</strong></div><div><small>Proposed capacity</small><strong>{form.proposed_capacity_kw} kW</strong></div></div>
+              <FinancialPlan estimate={financialEstimate} mode={purchaseMode} tenureYears={loanTenureYears} interestRatePct={interestRatePct} onModeChange={setPurchaseMode} onTenureChange={setLoanTenureYears} onInterestRateChange={setInterestRatePct} />
+              <button className="button button-primary proposal-download" type="button" disabled={!financialEstimate} onClick={downloadProposal}>📄 Download Feasibility Summary</button>
               <div className="step-three-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(2)}>← Back</button><button className="button button-primary" type="button" disabled={busy} onClick={() => { const formEl = document.getElementById('evaluate-form') as HTMLFormElement | null; formEl?.requestSubmit() }}>{busy ? 'Evaluating…' : offlinePreview ? 'Create offline preview' : workflow ? 'Re-evaluate application' : 'Run subsidy & verification check'}</button></div>
               <form id="evaluate-form" onSubmit={evaluate} />
               {workflow && <>
@@ -257,7 +293,7 @@ function App() {
               </>}
             </>}
           </section>
-          <div className="wizard-aside"><DashboardSummary monthlyUnits={form.monthly_units} tariffInrPerKwh={form.tariff_inr_per_kwh} sanctionedLoadKw={form.sanctioned_load_kw} roofAreaSqft={form.roof_area_sqft} /><section className="panel guide-prompt"><PanelHeading kicker="KNOW BEFORE YOU GO" title="How subsidies work" subtitle="Understand central assistance, metering and required documents." icon="i" /><button className="button button-outline full-button" type="button" onClick={() => setGuide(true)}>Open the solar guide</button></section>
+          <div className="wizard-aside"><DashboardSummary monthlyUnits={form.monthly_units} tariffInrPerKwh={form.tariff_inr_per_kwh} sanctionedLoadKw={form.sanctioned_load_kw} roofAreaSqft={form.roof_area_sqft} proposedCapacityKw={form.proposed_capacity_kw} mode={purchaseMode} tenureYears={loanTenureYears} interestRatePct={interestRatePct} onModeChange={setPurchaseMode} onTenureChange={setLoanTenureYears} onInterestRateChange={setInterestRatePct} /><section className="panel guide-prompt"><PanelHeading kicker="KNOW BEFORE YOU GO" title="How subsidies work" subtitle="Understand central assistance, metering and required documents." icon="i" /><button className="button button-outline full-button" type="button" onClick={() => setGuide(true)}>Open the solar guide</button></section>
             {workflow?.state === 'human_review_required' && <section className="panel next-panel"><div className="section-kicker">{offlinePreview ? 'LOCAL PREVIEW' : 'HUMAN REVIEW REQUIRED'}</div><p>{offlinePreview ? 'Review the local estimate; this preview will not contact a portal.' : 'Check the prepared payload before sending it to the simulated portal.'}</p><button className="button button-primary full-button" type="button" onClick={() => setReview(true)}>{offlinePreview ? 'Review offline preview' : 'Review submission'}</button></section>}
           </div>
         </div>

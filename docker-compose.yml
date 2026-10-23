@@ -1,24 +1,38 @@
 ﻿services:
-  agent-api:
+  backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     environment:
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
-      MOCK_PORTAL_URL: http://mock-portal:10000
-      PORT: "10000"
+      MOCK_PORTAL_URL: http://mock-discom:10000
+      PORT: "8000"
     ports:
-      - "8000:10000"
+      - "8000:8000"
+    expose:
+      - "8000"
     depends_on:
-      - mock-portal
+      - mock-discom
 
-  mock-portal:
+  mock-discom:
     build:
       context: ./backend
       dockerfile: Dockerfile
     command: ["uvicorn", "app.portal.mock_portal:app", "--host", "0.0.0.0", "--port", "10000"]
     environment:
       PORT: "10000"
+    expose:
+      - "10000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_PORTAL_URL: ${VITE_PORTAL_URL:-/api/mock-discom/portal}
     ports:
-      - "8001:10000"
+      - "5173:80"
+    depends_on:
+      - backend
 
