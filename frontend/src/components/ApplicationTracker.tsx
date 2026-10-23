@@ -9,7 +9,7 @@ const milestones = [
   { title: 'DBT subsidy credit to bank account', detail: 'Subsidy disbursement after required commissioning steps.' },
 ]
 
-export default function ApplicationTracker() {
+export default function ApplicationTracker({ onOpenPortal }: { onOpenPortal: () => void }) {
   const [reference, setReference] = useState('')
   const [trackedReference, setTrackedReference] = useState('')
   const [message, setMessage] = useState('')
@@ -38,7 +38,7 @@ export default function ApplicationTracker() {
       {message && <p className="tracker-error" role="alert">{message}</p>}
     </form>
     {trackedReference && <div className="tracker-results" aria-live="polite">
-      <div className="tracker-result-heading"><div><span className="guide-eyebrow">TRACKING REFERENCE</span><strong>{trackedReference}</strong></div><span className="tracker-current-status"><i />Technical feasibility in progress</span></div>
+      <div className="tracker-result-heading"><div><span className="guide-eyebrow">TRACKING REFERENCE</span><strong>{trackedReference}</strong></div><div className="tracker-result-actions"><span className="tracker-current-status"><i />Technical feasibility in progress</span><button className="button button-outline" type="button" onClick={onOpenPortal}>Open mock DISCOM portal</button></div></div>
       <ol className="tracker-timeline">
         {milestones.map((milestone, index) => {
           const status = index === 0 ? 'completed' : index === 1 ? 'in-progress' : 'pending'

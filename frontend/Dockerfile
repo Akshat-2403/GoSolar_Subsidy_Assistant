@@ -4,7 +4,7 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 ARG VITE_API_BASE_URL=
-ARG VITE_PORTAL_URL=/api/mock-discom/portal
+ARG VITE_PORTAL_URL=
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_PORTAL_URL=${VITE_PORTAL_URL}
 RUN npm run build

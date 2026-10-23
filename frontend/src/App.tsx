@@ -3,6 +3,7 @@ import DashboardSummary from './components/DashboardSummary'
 import ApplicationTracker from './components/ApplicationTracker'
 import BillUpload from './components/BillUpload'
 import FinancialPlan from './components/FinancialPlan'
+import MockDiscomPortalModal, { type MockPortalConsumer } from './components/MockDiscomPortalModal'
 import ProgressBar, { type WizardStep } from './components/ProgressBar'
 import RoofVisualizer from './components/RoofVisualizer'
 import SubsidyGuideModal from './components/SubsidyGuideModal'
@@ -14,7 +15,7 @@ import { validateConsumerNumber, validateMobile, validatePincode, validatePositi
 import './App.css'
 
 const API_URL = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-const PORTAL_URL = import.meta.env.VITE_PORTAL_URL || '/api/mock-discom/portal'
+const PORTAL_URL = import.meta.env.VITE_PORTAL_URL?.trim() || ''
 const BILL_OCR_URL = import.meta.env.VITE_BILL_OCR_URL || `${API_URL}/api/bills/parse`
 
 type EventItem = { node: string; status: string; message: string; timestamp: string }
@@ -33,6 +34,18 @@ type Intake = {
   required_documents: string; uploaded_documents: string; tariff_inr_per_kwh: number | ''
   monthly_units: number | ''; roof_area_sqft: number | ''; pincode: string; mobile: string
 }
+class BackendUnavailableError extends Error {}
+
+async function readApiJson(response: Response): Promise<Record<string, unknown>> {
+  const contentType = response.headers.get('content-type') || ''
+  if (!contentType.includes('json')) throw new BackendUnavailableError('The API endpoint is unavailable on this deployment.')
+  try {
+    return await response.json() as Record<string, unknown>
+  } catch {
+    throw new BackendUnavailableError('The API returned an unreadable response.')
+  }
+}
+
 const defaults: Intake = {
   applicant_name: '', state: '', applicant_type: 'owner', consumer_number: '', discom_code: '',
   sanctioned_load_kw: '', proposed_capacity_kw: '', owns_rooftop: true, has_grid_connection: true,
@@ -72,6 +85,7 @@ function App() {
   const [interestRatePct, setInterestRatePct] = useState(7)
   const [billUploadKey, setBillUploadKey] = useState(0)
   const [currentView, setCurrentView] = useState<'assessment' | 'tracking'>('assessment')
+  const [portalOpen, setPortalOpen] = useState(false)
   const activeWorkflowId = workflow?.workflow_id
   const stateNames = Object.keys(discoms).sort()
   const discomOptions = form.state ? discoms[form.state as keyof typeof discoms] ?? [] : []
@@ -111,6 +125,41 @@ function App() {
     ? calculateSolarFinancials({ monthlyUnits: Number(form.monthly_units), sanctionedLoadKw: Number(form.sanctioned_load_kw), roofAreaSqft: Number(form.roof_area_sqft), proposedCapacityKw: Number(form.proposed_capacity_kw), tariffInrPerKwh: Number(form.tariff_inr_per_kwh) }, interestRatePct, loanTenureYears)
     : null
   const estimatedSize = financialEstimate?.systemCapacityKw ?? 0
+  const portalConsumer: MockPortalConsumer = {
+    applicantName: form.applicant_name,
+    consumerNumber: form.consumer_number,
+    sanctionedLoadKw: form.sanctioned_load_kw,
+    appliedCapacityKw: form.proposed_capacity_kw,
+    state: form.state,
+    discom: form.discom_code,
+  }
+
+  async function openMockPortal() {
+    if (PORTAL_URL) {
+      try {
+        const portalUrl = new URL(PORTAL_URL, window.location.origin)
+        if (/^https?:$/.test(portalUrl.protocol) && portalUrl.origin !== window.location.origin) {
+          const portalWindow = window.open('about:blank', '_blank')
+          if (!portalWindow) { setPortalOpen(true); return }
+          portalWindow.opener = null
+          const controller = new AbortController()
+          const timeout = window.setTimeout(() => controller.abort(), 2500)
+          try {
+            await fetch(portalUrl.href, { method: 'HEAD', mode: 'no-cors', signal: controller.signal })
+            portalWindow.location.replace(portalUrl.href)
+            return
+          } catch {
+            portalWindow.close()
+          } finally {
+            window.clearTimeout(timeout)
+          }
+        }
+      } catch {
+        // Invalid or same-origin server routes use the static-friendly in-app portal.
+      }
+    }
+    setPortalOpen(true)
+  }
 
   function applyBillExtraction(data: BillExtraction) {
     setForm((current) => ({
@@ -131,33 +180,43 @@ function App() {
     if (!opened) setError('Your browser blocked the proposal window. Allow pop-ups for GoSolar and try again.')
   }
 
+  function createOfflinePreview(): boolean {
+    if (!financialEstimate) {
+      setError('Complete the financial inputs before creating a local preview.')
+      return false
+    }
+    const now = new Date().toISOString()
+    const mockEvents: EventItem[] = [
+      { node: 'validate_input', status: 'completed', message: 'Intake fields passed local preview checks.', timestamp: now },
+      { node: 'policy_checks', status: 'completed', message: 'Preview only; policy services were not contacted.', timestamp: now },
+      { node: 'financial_calculation', status: 'completed', message: 'Indicative estimate calculated locally.', timestamp: now },
+      { node: 'human_review', status: 'waiting', message: 'Review the preview before simulated submission.', timestamp: now },
+    ]
+    setWorkflow({
+      workflow_id: `LOCAL-${localWorkflowId}`, state: 'human_review_required', can_proceed: true,
+      human_approval_required: true, issues: [], missing_documents: [], application_parameters: { ...form },
+      evidence_log: [], events: mockEvents,
+      financial_summary: {
+        estimated_subsidy_inr: financialEstimate.subsidyInr,
+        estimated_annual_generation_kwh: financialEstimate.annualGenerationKwh,
+        estimated_annual_savings_inr: financialEstimate.annualBillSavingsInr,
+        estimated_payback_years: financialEstimate.cashPaybackYears,
+      },
+      application_id: null, policy_assessment: 'Local preview estimate only. No backend, policy source, or portal was contacted.',
+    })
+    setEvents(mockEvents)
+    setOfflinePreview(true)
+    setOfflineAvailable(false)
+    return true
+  }
+
   async function evaluate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!stepOneValid || !stepTwoValid) { setError('Complete all required fields in Steps 1 and 2 before evaluating.'); return }
     setError(''); setBusy(true)
     if (offlinePreview) {
-      const estimate = financialEstimate
-      if (!estimate) { setError('Complete the financial inputs before creating a preview.'); setBusy(false); return }
-      const now = new Date().toISOString()
-      const mockEvents: EventItem[] = [
-        { node: 'validate_input', status: 'completed', message: 'Intake fields passed local preview checks.', timestamp: now },
-        { node: 'policy_checks', status: 'completed', message: 'Preview only; policy services were not contacted.', timestamp: now },
-        { node: 'financial_calculation', status: 'completed', message: 'Indicative estimate calculated locally.', timestamp: now },
-        { node: 'human_review', status: 'waiting', message: 'Review the preview before simulated submission.', timestamp: now },
-      ]
-      setWorkflow({
-        workflow_id: `LOCAL-${localWorkflowId}`, state: 'human_review_required', can_proceed: true,
-        human_approval_required: true, issues: [], missing_documents: [], application_parameters: { ...form },
-        evidence_log: [], events: mockEvents,
-        financial_summary: {
-          estimated_subsidy_inr: estimate.subsidyInr,
-          estimated_annual_generation_kwh: estimate.annualGenerationKwh,
-          estimated_annual_savings_inr: estimate.annualBillSavingsInr,
-          estimated_payback_years: estimate.cashPaybackYears,
-        },
-        application_id: null, policy_assessment: 'Offline preview estimate only. No backend, policy source, or portal was contacted.',
-      })
-      setEvents(mockEvents); setBusy(false); setOfflineAvailable(false)
+      createOfflinePreview()
+      setBusy(false)
       return
     }
     const payload = {
@@ -174,13 +233,16 @@ function App() {
     }
     try {
       const response = await fetch(`${API_URL}/api/workflows/evaluate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || `Evaluation failed (${response.status})`)
+      const data = await readApiJson(response)
+      if (!response.ok) {
+        if ([502, 503, 504].includes(response.status)) throw new BackendUnavailableError('The backend service is temporarily unavailable.')
+        throw new Error(typeof data.detail === 'string' ? data.detail : `Evaluation failed (${response.status})`)
+      }
       setWorkflow(data as Workflow); setEvents(data.events as EventItem[])
     } catch (reason) {
-      if (reason instanceof TypeError) {
-        setOfflineAvailable(true)
-        setError('Backend agent service is offline or unreachable. Make sure the backend is running on port 8000, or switch to offline preview mode.')
+      if (reason instanceof TypeError || reason instanceof BackendUnavailableError) {
+        createOfflinePreview()
+        setError('Backend agent service is unavailable. A local preview is ready; no application was sent.')
       } else {
         setError(reason instanceof Error ? reason.message : 'The backend could not complete the assessment.')
       }
@@ -197,13 +259,17 @@ function App() {
     setBusy(true); setError('')
     try {
       const response = await fetch(`${API_URL}/api/workflows/${workflow.workflow_id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ human_approved: true }) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || `Submission failed (${response.status})`)
+      const data = await readApiJson(response)
+      if (!response.ok) {
+        if ([502, 503, 504].includes(response.status)) throw new BackendUnavailableError('The backend service is temporarily unavailable.')
+        throw new Error(typeof data.detail === 'string' ? data.detail : `Submission failed (${response.status})`)
+      }
       setWorkflow(data as Workflow); setEvents(data.events as EventItem[]); setReview(false)
     } catch (reason) {
-      if (reason instanceof TypeError) {
+      if (reason instanceof TypeError || reason instanceof BackendUnavailableError) {
         setOfflineAvailable(true)
-        setError('Backend agent service is offline or unreachable. Make sure the backend is running on port 8000, or switch to offline preview mode.')
+        setOfflinePreview(true)
+        setError('Backend service is unavailable. You can complete this assessment as a local preview; no portal submission was sent.')
       } else setError(reason instanceof Error ? reason.message : 'Could not submit to the mock portal.')
     }
     finally { setBusy(false) }
@@ -226,7 +292,7 @@ function App() {
       <div className="sidebar-bottom"><div className="system-card"><span className="status-dot" /><div><strong>Demo services</strong><small>Agent API · mock portal</small></div></div><div className="profile"><div className="avatar">GS</div><div><strong>GoSolar workspace</strong><small>Human approval enabled</small></div></div></div>
     </aside>
     <div className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><a className="button button-quiet" href={PORTAL_URL} target="_blank" rel="noreferrer">Open mock portal</a></div></header>
+      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><button className="button button-quiet" type="button" onClick={openMockPortal}>Open mock portal</button></div></header>
       <main className="page-content">
         {currentView === 'assessment' ? <>
         <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ROOFTOP SOLAR · PERSONALIZED ESTIMATE</div><h1>Plan your <span>solar journey</span></h1><p>Share a few details to explore your rooftop potential and available subsidy estimate.</p></div><button className="button button-outline" type="button" onClick={() => setGuide(true)}>Learn about subsidies</button></div>
@@ -278,6 +344,7 @@ function App() {
               <div className="review-details"><div><small>Applicant</small><strong>{form.applicant_name}</strong></div><div><small>State · DISCOM</small><strong>{form.state} · {form.discom_code}</strong></div><div><small>Consumer number</small><strong>{form.consumer_number}</strong></div><div><small>Usage · roof area</small><strong>{form.monthly_units} kWh/mo · {form.roof_area_sqft} sq. ft.</strong></div><div><small>Recommended system size</small><strong>{estimatedSize.toFixed(1)} kW</strong></div><div><small>Proposed capacity</small><strong>{form.proposed_capacity_kw} kW</strong></div></div>
               <FinancialPlan estimate={financialEstimate} mode={purchaseMode} tenureYears={loanTenureYears} interestRatePct={interestRatePct} onModeChange={setPurchaseMode} onTenureChange={setLoanTenureYears} onInterestRateChange={setInterestRatePct} />
               <button className="button button-primary proposal-download" type="button" disabled={!financialEstimate} onClick={downloadProposal}>📄 Download Feasibility Summary</button>
+              <button className="button button-outline portal-step-launch" type="button" onClick={openMockPortal}>Open mock DISCOM portal</button>
               <div className="step-three-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(2)}>← Back</button><button className="button button-primary" type="button" disabled={busy} onClick={() => { const formEl = document.getElementById('evaluate-form') as HTMLFormElement | null; formEl?.requestSubmit() }}>{busy ? 'Evaluating…' : offlinePreview ? 'Create offline preview' : workflow ? 'Re-evaluate application' : 'Run subsidy & verification check'}</button></div>
               <form id="evaluate-form" onSubmit={evaluate} />
               {workflow && <>
@@ -303,11 +370,12 @@ function App() {
           </div>
         </div>
         <footer className="page-footer"><span>GoSolar · Demonstration only</span><span>Not a government service or eligibility determination</span></footer>
-        </> : <ApplicationTracker />}
+        </> : <ApplicationTracker onOpenPortal={openMockPortal} />}
       </main>
     </div>
     {review && workflow && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReview(false) }}><section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="modal-header"><div><div className="eyebrow">{offlinePreview ? 'OFFLINE PREVIEW' : 'HUMAN-IN-THE-LOOP GATE'}</div><h2 id="review-title">{offlinePreview ? 'Review local preview' : 'Review before portal submission'}</h2><p>{offlinePreview ? 'Completing this preview will not contact a backend or portal.' : 'Approval submits prepared data to the simulated portal.'}</p></div><button className="modal-close" aria-label="Close review" onClick={() => setReview(false)}>×</button></div><div className="review-banner"><span>✓</span><div><strong>{offlinePreview ? 'Local estimate is ready' : 'Application checks are ready'}</strong><p>This is a synthetic filing and does not create a government application.</p></div></div><div className="diff-grid"><div className="diff-card"><div className="diff-title">REVIEWED APPLICATION</div><dl>{Object.entries(workflow.application_parameters).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') || '—' : String(value)}</dd></div>)}</dl></div></div><div className="modal-foot"><button className="button button-quiet" onClick={() => setReview(false)}>Back to estimate</button><button className="button button-primary" disabled={busy} onClick={approve}>{busy ? 'Submitting…' : offlinePreview ? 'Complete local preview' : 'Approve and submit'} →</button></div></section></div>}
     <SubsidyGuideModal open={guide} onClose={() => setGuide(false)} />
+    {portalOpen && <MockDiscomPortalModal open={portalOpen} consumer={portalConsumer} onClose={() => setPortalOpen(false)} />}
   </div>
 }
 
