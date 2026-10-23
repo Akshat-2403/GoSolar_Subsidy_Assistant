@@ -1,0 +1,107 @@
+﻿# Rooftop Solar Subsidy Assistant
+
+A demonstration system for evaluating rooftop solar application data, showing deterministic checks and evidence, pausing for human approval, and filing to a separate simulated DISCOM portal.
+
+This is a demo, not a government service. It does not verify real DISCOM/vendor records, document authenticity, current statutory rules, subsidy entitlement, or government approval.
+
+## Components
+
+- frontend/: React + Vite Mission Control UI.
+- backend/: FastAPI API and LangGraph workflow.
+- backend/app/portal/mock_portal.py: independently runnable simulated portal and REST API.
+
+The LangGraph workflow validates the request, evaluates policy guardrails and calculations, pauses at a human review interrupt, and resumes to submit the approved payload. It uses an in-memory checkpointer and workflow store for the single-process demo; workflow state is lost on restart.
+
+The portal driver uses REST when MOCK_PORTAL_URL is configured, retries transient service failures up to three times, and leaves failed approved submissions in a retryable queue. Without that variable, the backend uses the same portal validation locally for single-process development.
+
+## Local setup
+
+### Backend API
+
+From backend/:
+
+~~~powershell
+uv sync --group dev
+$env:CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+$env:MOCK_PORTAL_URL = "http://127.0.0.1:8001"
+uv run uvicorn app.main:app --reload --port 8000
+~~~
+
+### Mock portal
+
+In another terminal, from backend/:
+
+~~~powershell
+uv run uvicorn app.portal.mock_portal:app --reload --port 8001
+~~~
+
+Portal UI: http://127.0.0.1:8001  
+Portal API: http://127.0.0.1:8001/api/applications
+
+### Mission Control UI
+
+From frontend/:
+
+~~~powershell
+npm ci
+Copy-Item .env.example .env.local
+npm run dev
+~~~
+
+The frontend uses VITE_API_URL and VITE_PORTAL_URL from .env.local. Defaults target localhost ports 8000 and 8001.
+
+## Tests and build checks
+
+From backend/:
+
+~~~powershell
+uv run --group dev pytest -v
+~~~
+
+From frontend/:
+
+~~~powershell
+npm run build
+npm run lint
+~~~
+
+## Docker
+
+From the repository root:
+
+~~~powershell
+docker compose up --build
+~~~
+
+The compose file runs the API on port 8000 and the standalone mock portal on port 8001. Run the Vite app locally or deploy it separately.
+
+## Cloud demo deployment
+
+1. Deploy backend/ as a Render Docker web service using backend/Dockerfile. Set CORS_ORIGINS to the exact deployed frontend origin, for example https://your-mission-control.vercel.app. Do not use a wildcard origin when credentials are enabled.
+2. Deploy a second Render Docker service from the same backend/Dockerfile, with the start command: uvicorn app.portal.mock_portal:app --host 0.0.0.0 --port $PORT.
+3. Set MOCK_PORTAL_URL on the API service to the portal service's HTTPS origin.
+4. Deploy frontend/ to Vercel with build command npm run build, output directory dist, and environment values VITE_API_URL=https://your-agent-api.onrender.com and VITE_PORTAL_URL=https://your-mock-portal.onrender.com.
+5. Add the final Vercel origin to the API service's CORS_ORIGINS, then redeploy the API.
+
+VITE_* values are included in the browser bundle; put no secrets in them. The demo stores state in process memory, so configure one API instance and expect workflows to clear on restart. Before multi-instance or production use, replace the in-memory workflow store/checkpointer with a durable database-backed implementation and verify all rules against authoritative, current utility and scheme sources.
+
+## API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /api/applications/validate | Basic application validation |
+| POST | /api/workflows/evaluate | Start graph and return its current state |
+| GET | /api/workflows/{workflow_id} | Read workflow status |
+| GET | /api/workflows/{workflow_id}/events | Replay workflow events as SSE |
+| POST | /api/workflows/{workflow_id}/approve | Resume LangGraph after explicit approval |
+| POST | /api/workflows/{workflow_id}/submit | Backward-compatible approval route |
+| GET | /api/health | Health check |
+
+## Demonstration behavior and limits
+
+- The subsidy formula and generation/payback assumptions are deterministic examples from the supplied blueprint. They are not dynamically verified against government circulars.
+- Empanelment and document upload status are applicant-supplied declarations. The portal validates fields but does not query a DISCOM registry or authenticate documents.
+- MOCK_PORTAL_FAIL_STATUS=503 makes the portal return a maintenance error for retry-path demonstrations.
+- The standalone portal generates synthetic APP-SOL-2026-XXXXX IDs only.
+- OCR, evidence RAG, Supabase persistence, CAPTCHA solving, and real government submission are not implemented.
+

@@ -1,427 +1,196 @@
-import { useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import './App.css'
 
-type WorkflowStatus = 'idle' | 'running' | 'blocked' | 'review' | 'submitted'
-type NodeStatus = 'done' | 'active' | 'waiting' | 'blocked'
-type FormData = {
-  consumerNumber: string
-  discomCode: string
-  sanctionedLoad: number
-  capacity: number
-  ownership: 'OWNER' | 'TENANT'
-  nocAttached: boolean
-  vendor: string
-  monthlyConsumption: number
-  rooftopArea: number
-  tariff: number
-  costPerKw: number
-}
-type Evidence = {
-  title: string
-  clause: string
-  snippet: string
-  sourceUrl: string
-  note: string
-}
+const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
+const PORTAL_URL = import.meta.env.VITE_PORTAL_URL || 'http://127.0.0.1:8001'
 
-const initialForm: FormData = {
-  consumerNumber: 'ABCD12345678',
-  discomCode: 'MSEDCL',
-  sanctionedLoad: 5,
-  capacity: 3,
-  ownership: 'OWNER',
-  nocAttached: false,
-  vendor: 'sunrise-approved',
-  monthlyConsumption: 350,
-  rooftopArea: 400,
-  tariff: 8,
-  costPerKw: 60000,
+type EventItem = { node: string; status: string; message: string; timestamp: string }
+type Evidence = { rule: string; outcome: string; excerpt: string; checked_at: string; source_url: string | null }
+type Workflow = {
+  workflow_id: string; state: string; can_proceed: boolean; human_approval_required: boolean
+  issues: string[]; missing_documents: string[]; application_parameters: Record<string, unknown>
+  evidence_log: Evidence[]; events: EventItem[]; financial_summary: null | {
+    estimated_subsidy_inr: number; estimated_annual_generation_kwh: number; estimated_annual_savings_inr: number; estimated_payback_years: number
+  }; application_id: string | null
 }
-
-const vendors = [
-  { id: 'sunrise-approved', name: 'Sunrise Solar — empanelled', approved: true },
-  { id: 'green-grid-approved', name: 'GreenGrid Energy — empanelled', approved: true },
-  { id: 'unverified-vendor', name: 'Local installer — not verified', approved: false },
+type Intake = {
+  applicant_name: string; state: string; applicant_type: 'owner' | 'tenant'; consumer_number: string
+  discom_code: string; sanctioned_load_kw: number; proposed_capacity_kw: number; owns_rooftop: boolean
+  has_grid_connection: boolean; installer_id: string; installer_empanelled: boolean; landlord_noc_uploaded: boolean
+  required_documents: string; uploaded_documents: string; tariff_inr_per_kwh: number
+}
+const defaults: Intake = {
+  applicant_name: '', state: '', applicant_type: 'owner', consumer_number: '', discom_code: '',
+  sanctioned_load_kw: 5, proposed_capacity_kw: 3, owns_rooftop: true, has_grid_connection: true,
+  installer_id: '', installer_empanelled: true, landlord_noc_uploaded: false,
+  required_documents: '', uploaded_documents: '', tariff_inr_per_kwh: 8,
+}
+const nodes = [
+  ['validate_input', 'Validate intake schema', 'Required fields and numeric bounds'],
+  ['policy_checks', 'Evaluate policy guardrails', 'Ownership · grid · vendor · capacity · documents'],
+  ['financial_calculation', 'Calculate estimate', 'Subsidy slab · generation · payback'],
+  ['human_review', 'Human approval gate', 'Review the payload before mock filing'],
+  ['portal_submission', 'Submit to mock portal', 'Capture simulated application ID'],
 ]
-
-const evidenceItems: Evidence[] = [
-  {
-    title: 'Central subsidy calculation',
-    clause: 'Specification §3.3 · Tiered subsidy',
-    snippet: 'First 2 kW: ₹30,000 per kW. Third kW: ₹18,000. Capacity of 3 kW or more is capped at ₹78,000 total.',
-    sourceUrl: 'https://pmsuryaghar.gov.in/',
-    note: 'Figures shown here follow the project specification and must be verified against current official scheme guidance before real applications.',
-  },
-  {
-    title: 'Sanctioned-load guardrail',
-    clause: 'Specification §3.3 · Rule C',
-    snippet: 'The proposal is flagged when planned solar capacity exceeds the sanctioned load; offer a capped proposal or a load-enhancement path.',
-    sourceUrl: 'https://www.mahadiscom.in/',
-    note: 'Actual capacity limits depend on the applicable DISCOM rules and connection type. The frontend does not independently certify compliance.',
-  },
-  {
-    title: 'Ownership and NOC',
-    clause: 'Specification §3.3 · Rule A',
-    snippet: 'When roof ownership is TENANT, a No Objection Certificate must be attached before the workflow can advance.',
-    sourceUrl: 'https://pmsuryaghar.gov.in/',
-    note: 'This is the project’s workflow guardrail. Confirm the documents required for the applicant’s specific property and scheme.',
-  },
-]
-
-function formatINR(value: number) {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(Number.isFinite(value) ? value : 0)
-}
-
-function calculateSubsidy(capacity: number) {
-  const kw = Math.max(0, capacity)
-  return Math.min(kw, 2) * 30000 + Math.min(Math.max(kw - 2, 0), 1) * 18000
-}
 
 function App() {
-  const [form, setForm] = useState<FormData>(initialForm)
-  const [status, setStatus] = useState<WorkflowStatus>('idle')
-  const [activeNav, setActiveNav] = useState('Mission control')
-  const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null)
-  const [reviewOpen, setReviewOpen] = useState(false)
-  const [uploadName, setUploadName] = useState('')
-  const [notice, setNotice] = useState('Demo mode · calculations use the project specification')
-  const [applicationId, setApplicationId] = useState('')
-  const [lastRun, setLastRun] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const fileInput = useRef<HTMLInputElement>(null)
+  const [form, setForm] = useState<Intake>(defaults)
+  const [workflow, setWorkflow] = useState<Workflow | null>(null)
+  const [events, setEvents] = useState<EventItem[]>([])
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [review, setReview] = useState(false)
 
-  const chosenVendor = vendors.find((vendor) => vendor.id === form.vendor) ?? vendors[0]
-  const subsidy = useMemo(() => calculateSubsidy(form.capacity), [form.capacity])
-  const annualGeneration = form.capacity * 1450
-  const estimatedSystemCost = form.capacity * form.costPerKw
-  const netCost = Math.max(0, estimatedSystemCost - subsidy)
-  const annualSavings = annualGeneration * form.tariff
-  const payback = annualSavings > 0 ? netCost / annualSavings : 0
-  const areaRequired = form.capacity * 100
-  const capacityExceeded = form.capacity > form.sanctionedLoad
-  const areaInsufficient = form.rooftopArea > 0 && form.rooftopArea < areaRequired
-  const consumerValid = /^[A-Z0-9]{8,16}$/.test(form.consumerNumber.trim())
-  const blockers = [
-    !consumerValid ? 'Consumer number must be 8–16 uppercase letters or digits.' : '',
-    form.ownership === 'TENANT' && !form.nocAttached ? 'Tenant application needs an uploaded NOC before it can continue.' : '',
-    !chosenVendor.approved ? 'Selected installer is not verified as empanelled.' : '',
-    areaInsufficient ? `Rooftop area appears low: approximately ${areaRequired} sq. ft. is needed for ${form.capacity} kW.` : '',
-  ].filter(Boolean)
-  const warnings = [
-    capacityExceeded ? `Proposed capacity (${form.capacity} kW) exceeds sanctioned load (${form.sanctionedLoad} kW).` : '',
-  ].filter(Boolean)
+  const activeWorkflowId = workflow?.workflow_id
 
-  const update = <K extends keyof FormData>(key: K, value: FormData[K]) => {
-    setForm((current) => ({ ...current, [key]: value }))
-    setStatus('idle')
-    setApplicationId('')
-  }
-
-  const handleFile = (file?: File) => {
-    if (!file) return
-    setUploadName(file.name)
-    setNotice(`${file.name} attached. OCR auto-fill requires a connected backend; review extracted values before use.`)
-  }
-
-  const runValidation = () => {
-    setLastRun(new Date().toLocaleTimeString())
-    setApplicationId('')
-    if (blockers.length > 0) {
-      setStatus('blocked')
-      setNotice('Validation halted: resolve the blocking items listed in Intake & validation.')
-      return
+  useEffect(() => {
+    if (!activeWorkflowId) return
+    const stream = new EventSource(API_URL + '/api/workflows/' + activeWorkflowId + '/events')
+    stream.onmessage = (message) => {
+      try {
+        const item = JSON.parse(message.data) as EventItem
+        setEvents((current) => current.some((event) => event.node === item.node && event.timestamp === item.timestamp) ? current : [...current, item])
+      } catch { setError('Received an unreadable workflow event.') }
     }
-    setStatus('review')
-    setNotice(warnings.length ? 'Validation completed with a capacity warning. Review the proposal before proceeding.' : 'Validation completed. Human review is required before any submission.')
-    setReviewOpen(true)
-  }
+    stream.addEventListener('complete', () => stream.close())
+    stream.onerror = () => stream.close()
+    return () => stream.close()
+  }, [activeWorkflowId])
 
-  const authorizeSubmission = async () => {
-    if (blockers.length > 0) {
-      setReviewOpen(false)
-      setStatus('blocked')
-      setNotice('Submission blocked. Resolve the validation issues first.')
-      return
-    }
-    setSubmitting(true)
-    const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '')
-    if (!apiBase) {
-      setSubmitting(false)
-      setReviewOpen(false)
-      setNotice('Demo only: no VITE_API_BASE_URL is configured. No application was submitted. Configure your real backend endpoint before enabling submission.')
-      setStatus('review')
-      return
+  function update<K extends keyof Intake>(key: K, value: Intake[K]) { setForm((current) => ({ ...current, [key]: value })) }
+  async function evaluate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setError(''); setBusy(true)
+    const payload = {
+      ...form, consumer_number: form.consumer_number.trim().toUpperCase(),
+      required_documents: form.required_documents.split(',').map((x) => x.trim()).filter(Boolean),
+      uploaded_documents: form.uploaded_documents.split(',').map((x) => x.trim()).filter(Boolean),
     }
     try {
-      // Replace /api/applications/submit with the actual route exposed by your FastAPI backend.
-      const response = await fetch(`${apiBase}/api/applications/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          consumer_number: form.consumerNumber,
-          discom_code: form.discomCode,
-          sanctioned_load_kw: form.sanctionedLoad,
-          planned_capacity_kw: form.capacity,
-          roof_ownership_type: form.ownership,
-          noc_document_attached: form.nocAttached,
-          selected_vendor_id: form.vendor,
-          monthly_avg_consumption_kwh: form.monthlyConsumption,
-          rooftop_area_sqft: form.rooftopArea,
-          human_approved: true,
-        }),
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.detail || `Backend returned HTTP ${response.status}`)
-      const id = payload.application_id || payload.applicationId || payload.id
-      if (!id) throw new Error('Backend responded without an application ID. Submission status is unconfirmed.')
-      setApplicationId(String(id))
-      setStatus('submitted')
-      setNotice('Backend returned an application ID. Verify the record and audit log in your backend.')
-      setReviewOpen(false)
-    } catch (error) {
-      setStatus('review')
-      setNotice(`Submission could not be confirmed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-      setReviewOpen(false)
-    } finally {
-      setSubmitting(false)
-    }
+      const response = await fetch(API_URL + '/api/workflows/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || 'Evaluation failed (' + response.status + ')')
+      setWorkflow(data as Workflow); setEvents(data.events as EventItem[])
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not reach the backend.') }
+    finally { setBusy(false) }
   }
-
-  const exportAudit = () => {
-    const audit = {
-      product: 'Rooftop Solar Subsidy Assistant',
-      exported_at: new Date().toISOString(),
-      mode: import.meta.env.VITE_API_BASE_URL ? 'backend-configured' : 'demo-only',
-      workflow_status: status,
-      application_id: applicationId || null,
-      input: form,
-      calculations: {
-        subsidy_inr: subsidy,
-        annual_generation_kwh: annualGeneration,
-        estimated_system_cost_inr: estimatedSystemCost,
-        net_cost_after_subsidy_inr: netCost,
-        estimated_annual_savings_inr: annualSavings,
-        estimated_payback_years: Number(payback.toFixed(2)),
-      },
-      blockers,
-      warnings,
-      document: uploadName || null,
-      note: 'Frontend-generated summary; not a digitally signed or official government audit document.',
-    }
-    const blob = new Blob([JSON.stringify(audit, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = 'rooftop-solar-audit-summary.json'
-    anchor.click()
-    URL.revokeObjectURL(url)
+  async function approve() {
+    if (!workflow) return
+    setBusy(true); setError('')
+    try {
+      const response = await fetch(API_URL + '/api/workflows/' + workflow.workflow_id + '/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ human_approved: true }) })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || 'Submission failed (' + response.status + ')')
+      setWorkflow(data as Workflow); setEvents(data.events as EventItem[]); setReview(false)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not submit to the mock portal.') }
+    finally { setBusy(false) }
   }
+  function startNew() { setWorkflow(null); setEvents([]); setError(''); setReview(false); setForm(defaults) }
 
-  const nodes: { title: string; detail: string; state: NodeStatus }[] = [
-    { title: 'Input ingest', detail: 'Document & form intake', state: status === 'idle' ? 'waiting' : 'done' },
-    { title: 'Rule verification', detail: blockers.length ? 'Blocking issue found' : warnings.length ? 'Review warning' : 'Guardrails checked', state: status === 'blocked' ? 'blocked' : status === 'idle' ? 'waiting' : 'done' },
-    { title: 'Financial engine', detail: 'Subsidy & payback estimate', state: status === 'idle' || status === 'blocked' ? 'waiting' : 'done' },
-    { title: 'Human review gate', detail: status === 'review' ? 'Awaiting decision' : status === 'submitted' ? 'Approved' : 'Approval required', state: status === 'review' ? 'active' : status === 'submitted' ? 'done' : 'waiting' },
-    { title: 'Portal submitter', detail: status === 'submitted' ? 'Backend confirmed ID' : 'Not executed', state: status === 'submitted' ? 'done' : 'waiting' },
-  ]
-
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark"><span>☀</span></div>
-          <div><strong>rooftop<span>.</span></strong><small>SUBSIDY ASSISTANT</small></div>
-        </div>
-        <div className="workspace-label">WORKSPACE</div>
-        <nav className="nav-list" aria-label="Main navigation">
-          {[
-            ['Mission control', '◫'],
-            ['Applications', '▤'],
-            ['Evidence library', '⌕'],
-            ['Audit trail', '↗'],
-          ].map(([label, icon]) => (
-            <button key={label} className={`nav-item ${activeNav === label ? 'selected' : ''}`} onClick={() => {
-              setActiveNav(label)
-              if (label === 'Evidence library') setSelectedEvidence(evidenceItems[0])
-              if (label === 'Audit trail') setNotice('Audit summary is generated locally from the current workflow. Export it using the button below.')
-            }}>
-              <span className="nav-icon">{icon}</span>{label}
-              {label === 'Applications' && applicationId && <span className="nav-count">1</span>}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="system-card">
-            <span className="status-dot" />
-            <div><strong>Local workspace</strong><small>Backend connection unverified</small></div>
-          </div>
-          <div className="profile">
-            <div className="avatar">RA</div><div><strong>Rooftop Admin</strong><small>Project workspace</small></div><span className="profile-more">•••</span>
-          </div>
-        </div>
-      </aside>
-
-      <main className="main-area">
-        <header className="topbar">
-          <div className="breadcrumbs">Workspace <span>/</span> <strong>{activeNav}</strong></div>
-          <div className="topbar-right"><span className="env-pill"><span className="status-dot" /> DEVELOPMENT</span><button className="icon-button" aria-label="Notifications">♧</button><div className="avatar small-avatar">RA</div></div>
-        </header>
-
-        <div className="page-content">
-          <section className="page-heading">
-            <div>
-              <div className="eyebrow"><span className="eyebrow-line" /> SOLAR SUBSIDY WORKFLOW</div>
-              <h1>Mission control<span>.</span></h1>
-              <p>Validate an application, inspect the evidence, and approve every action with confidence.</p>
-            </div>
-            <button className="button button-quiet" onClick={exportAudit}><span>↓</span> Export audit summary</button>
-          </section>
-
-          <section className="summary-grid" aria-label="Application overview">
-            <div className="summary-card">
-              <div className="summary-label">ESTIMATED SUBSIDY <span className="summary-icon green">₹</span></div>
-              <div className="summary-value">{formatINR(subsidy)}</div>
-              <div className="summary-foot"><span className="mini-check">✓</span> Based on project subsidy tiers</div>
-            </div>
-            <div className="summary-card">
-              <div className="summary-label">ANNUAL GENERATION <span className="summary-icon amber">☼</span></div>
-              <div className="summary-value">{annualGeneration.toLocaleString('en-IN')} <small>kWh</small></div>
-              <div className="summary-foot">Estimated · 1,450 kWh per kW/year</div>
-            </div>
-            <div className="summary-card">
-              <div className="summary-label">PAYBACK PERIOD <span className="summary-icon blue">↗</span></div>
-              <div className="summary-value">{payback.toFixed(1)} <small>years</small></div>
-              <div className="summary-foot">Illustrative, based on entered costs</div>
-            </div>
-            <div className="summary-card">
-              <div className="summary-label">WORKFLOW STATUS <span className="summary-icon violet">◷</span></div>
-              <div className="summary-value status-value">{status === 'submitted' ? 'Verified' : status === 'blocked' ? 'Blocked' : status === 'review' ? 'In review' : 'Draft'}</div>
-              <div className="summary-foot"><span className={`status-chip ${status}`}>{status === 'submitted' ? 'ID received' : status === 'blocked' ? 'Action needed' : status === 'review' ? 'Sign-off needed' : 'Not started'}</span></div>
-            </div>
-          </section>
-
-          {notice && <div className={`notice ${status === 'blocked' ? 'notice-warning' : status === 'submitted' ? 'notice-success' : ''}`}><span className="notice-symbol">{status === 'blocked' ? '!' : status === 'submitted' ? '✓' : 'i'}</span><span>{notice}</span><button aria-label="Dismiss notice" onClick={() => setNotice('')}>×</button></div>}
-
-          <section className="mission-grid">
-            <div className="panel intake-panel">
-              <div className="panel-heading">
-                <div><div className="section-kicker">01 / INTAKE</div><h2>Application details</h2><p>Enter consumer and rooftop information.</p></div>
-                <span className="step-icon">↙</span>
-              </div>
-
-              <div className="upload-zone" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); handleFile(event.dataTransfer.files[0]) }}>
-                <input ref={fileInput} type="file" accept=".pdf,.png,.jpg,.jpeg" hidden onChange={(event) => handleFile(event.target.files?.[0])} />
-                <div className="upload-icon">↑</div>
-                <div className="upload-copy"><strong>{uploadName || 'Upload electricity bill'}</strong><span>{uploadName ? 'Attached locally · OCR not yet connected' : 'Drag & drop PDF or image, or browse files'}</span></div>
-                <button className="browse-button" onClick={() => fileInput.current?.click()}>Browse</button>
-              </div>
-
-              <div className="form-section-title">CONSUMER INFORMATION</div>
-              <div className="form-grid">
-                <label className="field full"><span>Consumer account number</span><input value={form.consumerNumber} maxLength={16} onChange={(e) => update('consumerNumber', e.target.value.toUpperCase())} placeholder="8–16 letters or digits" /><small>Demo value prefilled. Confirm against the utility bill.</small></label>
-                <label className="field"><span>Distribution company (DISCOM)</span><select value={form.discomCode} onChange={(e) => update('discomCode', e.target.value)}><option value="MSEDCL">MSEDCL · Maharashtra</option><option value="BESCOM">BESCOM · Karnataka</option><option value="TANGEDCO">TANGEDCO · Tamil Nadu</option><option value="OTHER">Other / not listed</option></select></label>
-                <label className="field"><span>Monthly usage (kWh)</span><input type="number" min="1" value={form.monthlyConsumption} onChange={(e) => update('monthlyConsumption', Math.max(1, Number(e.target.value)))} /></label>
-              </div>
-
-              <div className="form-section-title">ROOFTOP & SYSTEM</div>
-              <div className="form-grid">
-                <label className="field"><span>Roof ownership</span><select value={form.ownership} onChange={(e) => update('ownership', e.target.value as FormData['ownership'])}><option value="OWNER">Owner</option><option value="TENANT">Tenant / leased</option></select></label>
-                <label className="field"><span>Sanctioned load (kW)</span><input type="number" min="0.1" step="0.1" value={form.sanctionedLoad} onChange={(e) => update('sanctionedLoad', Math.max(0.1, Number(e.target.value)))} /></label>
-                <label className="field full range-field"><span>Planned solar capacity <strong>{form.capacity.toFixed(1)} kW</strong></span><input type="range" min="0.5" max="10" step="0.5" value={form.capacity} onChange={(e) => update('capacity', Number(e.target.value))} /><div className="range-labels"><span>0.5 kW</span><span>10 kW</span></div></label>
-                <label className="field"><span>Shadow-free roof area (sq. ft.)</span><input type="number" min="0" value={form.rooftopArea} onChange={(e) => update('rooftopArea', Math.max(0, Number(e.target.value)))} /></label>
-                <label className="field"><span>Installer / vendor</span><select value={form.vendor} onChange={(e) => update('vendor', e.target.value)}>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select></label>
-                {form.ownership === 'TENANT' && <label className="noc-field full"><input type="checkbox" checked={form.nocAttached} onChange={(e) => update('nocAttached', e.target.checked)} /><span><strong>Landlord NOC attached</strong><small>Confirm the NOC is actually attached before proceeding.</small></span><span className={`tiny-tag ${form.nocAttached ? 'ok' : 'warning'}`}>{form.nocAttached ? 'ATTACHED' : 'REQUIRED'}</span></label>}
-              </div>
-
-              <div className="form-section-title">FINANCIAL ASSUMPTIONS</div>
-              <div className="form-grid">
-                <label className="field"><span>Average system cost / kW (₹)</span><input type="number" min="1" value={form.costPerKw} onChange={(e) => update('costPerKw', Math.max(1, Number(e.target.value)))} /></label>
-                <label className="field"><span>Retail tariff (₹ / kWh)</span><input type="number" min="0.1" step="0.1" value={form.tariff} onChange={(e) => update('tariff', Math.max(0.1, Number(e.target.value)))} /></label>
-              </div>
-
-              <div className="validation-box">
-                <div className="validation-head"><strong>Pre-flight checks</strong><span className={blockers.length ? 'text-danger' : 'text-success'}>{blockers.length ? `${blockers.length} blocker(s)` : 'No blockers detected'}</span></div>
-                {blockers.length === 0 && warnings.length === 0 && <div className="check-line"><span className="check-circle">✓</span> Consumer format, vendor, ownership and roof area look ready for review.</div>}
-                {blockers.map((item) => <div className="issue-line" key={item}><span>!</span>{item}</div>)}
-                {warnings.map((item) => <div className="warning-line" key={item}><span>△</span>{item}</div>)}
-              </div>
-              <button className="button button-primary full-button" onClick={runValidation}><span>✦</span> Run validation agent <span className="button-arrow">→</span></button>
-              <div className="form-footnote">No portal action occurs until the human review gate is approved.</div>
-            </div>
-
-            <div className="center-column">
-              <div className="panel workflow-panel">
-                <div className="panel-heading">
-                  <div><div className="section-kicker">02 / ORCHESTRATION</div><h2>Live workflow</h2><p>Agent state machine · frontend simulation</p></div>
-                  <span className={`live-pill ${status !== 'idle' ? 'live-active' : ''}`}><span />{status === 'idle' ? 'STANDBY' : status === 'blocked' ? 'HALTED' : status === 'submitted' ? 'COMPLETE' : 'ACTIVE'}</span>
-                </div>
-                <div className="workflow-list">
-                  {nodes.map((node, index) => <div className={`workflow-node ${node.state}`} key={node.title}>
-                    <div className="node-rail"><div className="node-circle">{node.state === 'done' ? '✓' : node.state === 'blocked' ? '!' : String(index + 1).padStart(2, '0')}</div>{index < nodes.length - 1 && <div className="node-line" />}</div>
-                    <div className="node-content"><strong>{node.title}</strong><span>{node.detail}</span></div>
-                    <span className="node-state">{node.state === 'done' ? 'DONE' : node.state === 'active' ? 'WAITING' : node.state === 'blocked' ? 'BLOCKED' : 'QUEUED'}</span>
-                  </div>)}
-                </div>
-                <div className="workflow-footer"><div><span className="status-dot" /> {lastRun ? `Last run at ${lastRun}` : 'Waiting for validation input'}</div><span>STATEFUL FLOW</span></div>
-              </div>
-
-              <div className="panel finance-panel">
-                <div className="panel-heading compact-heading"><div><div className="section-kicker">03 / FINANCIAL ENGINE</div><h2>Solar yield forecast</h2></div><span className="finance-badge">ESTIMATE</span></div>
-                <div className="finance-main"><div><span className="metric-label">Net cost after subsidy</span><strong>{formatINR(netCost)}</strong><span className="metric-caption">System cost less estimated subsidy</span></div><div className="sun-illustration">☼</div></div>
-                <div className="finance-bars">
-                  <div className="bar-row"><span>Gross system cost</span><strong>{formatINR(estimatedSystemCost)}</strong><div className="bar-track"><div className="bar-fill cost-fill" style={{ width: '100%' }} /></div></div>
-                  <div className="bar-row"><span>Estimated subsidy</span><strong>{formatINR(subsidy)}</strong><div className="bar-track"><div className="bar-fill subsidy-fill" style={{ width: `${Math.min(100, estimatedSystemCost ? subsidy / estimatedSystemCost * 100 : 0)}%` }} /></div></div>
-                </div>
-                <div className="finance-foot"><div><span>Annual savings</span><strong>{formatINR(annualSavings)}</strong></div><div><span>Required roof area</span><strong>{areaRequired.toLocaleString('en-IN')} sq. ft.</strong></div></div>
-              </div>
-            </div>
-
-            <aside className="right-column">
-              <div className="panel evidence-panel">
-                <div className="panel-heading">
-                  <div><div className="section-kicker">04 / TRACEABILITY</div><h2>Evidence drawer</h2><p>Inspect the rule behind each check.</p></div>
-                  <span className="evidence-icon">⌕</span>
-                </div>
-                <div className="evidence-status"><span className="status-dot amber-dot" /> SPECIFICATION-BASED DEMO</div>
-                <div className="evidence-list">
-                  {evidenceItems.map((item, index) => <button className={`evidence-item ${selectedEvidence?.title === item.title ? 'evidence-selected' : ''}`} key={item.title} onClick={() => setSelectedEvidence(selectedEvidence?.title === item.title ? null : item)}>
-                    <span className="evidence-index">0{index + 1}</span><span className="evidence-item-copy"><strong>{item.title}</strong><small>{item.clause}</small></span><span className="evidence-chevron">↗</span>
-                  </button>)}
-                </div>
-                {selectedEvidence && <div className="evidence-detail"><div className="evidence-detail-top"><span>SELECTED EVIDENCE</span><button aria-label="Close evidence" onClick={() => setSelectedEvidence(null)}>×</button></div><strong>{selectedEvidence.title}</strong><p>{selectedEvidence.snippet}</p><div className="evidence-note">{selectedEvidence.note}</div><a href={selectedEvidence.sourceUrl} target="_blank" rel="noreferrer">Open reference website ↗</a><small>Retrieved timestamp: not available in demo mode</small></div>}
-                <div className="evidence-disclaimer"><span>ⓘ</span><p>Evidence is not fetched live yet. These cards are based on the project spec and are not a verified legal determination.</p></div>
-              </div>
-
-              <div className="panel next-panel">
-                <div className="section-kicker">NEXT ACTION</div>
-                <div className="next-icon">✓</div>
-                <h3>{status === 'blocked' ? 'Resolve blockers' : status === 'submitted' ? 'Application ID received' : status === 'review' ? 'Review is ready' : 'Ready when you are'}</h3>
-                <p>{status === 'blocked' ? 'Update the flagged fields and run validation again.' : status === 'submitted' ? 'The configured backend returned an application ID.' : status === 'review' ? 'Inspect the payload and explicitly authorize submission.' : 'Run the validation agent to start the workflow.'}</p>
-                {applicationId && <div className="application-id"><small>APPLICATION ID</small><strong>{applicationId}</strong></div>}
-                <button className="button button-outline full-button" onClick={() => status === 'review' ? setReviewOpen(true) : runValidation()}>{status === 'review' ? 'Open approval review' : status === 'submitted' ? 'Re-run validation' : 'Start validation'} <span className="button-arrow">→</span></button>
-              </div>
-            </aside>
-          </section>
-
-          <footer className="page-footer"><span>ROOFTOP SUBSIDY ASSISTANT <span className="footer-dot">•</span> FRONTEND PROTOTYPE</span><span>Built for transparent, human-approved workflows</span></footer>
-        </div>
-      </main>
-
-      {reviewOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReviewOpen(false) }}>
-        <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
-          <div className="modal-header"><div><div className="section-kicker">HUMAN-IN-THE-LOOP GATE</div><h2 id="review-title">Review before submission</h2><p>Compare the proposed payload and approve only when it is correct.</p></div><button className="modal-close" onClick={() => setReviewOpen(false)} aria-label="Close review">×</button></div>
-          <div className="review-banner"><span>ⓘ</span><div><strong>Explicit approval required</strong><p>Authorizing sends the application payload to the configured backend endpoint. In demo mode, no submission can occur.</p></div></div>
-          {warnings.length > 0 && <div className="modal-warning">{warnings.map((warning) => <p key={warning}>△ {warning}</p>)}</div>}
-          <div className="diff-grid"><div className="diff-card"><div className="diff-title"><span>01</span> USER INPUT</div><dl><dt>Consumer number</dt><dd>{form.consumerNumber}</dd><dt>DISCOM</dt><dd>{form.discomCode}</dd><dt>Ownership</dt><dd>{form.ownership}</dd><dt>Planned capacity</dt><dd>{form.capacity} kW</dd><dt>Selected vendor</dt><dd>{chosenVendor.name}</dd></dl></div><div className="diff-card normalized"><div className="diff-title"><span>02</span> NORMALIZED PAYLOAD</div><dl><dt>Sanctioned load</dt><dd>{form.sanctionedLoad} kW</dd><dt>NOC flag</dt><dd>{form.nocAttached ? 'Attached' : 'Not attached / not required'}</dd><dt>Subsidy estimate</dt><dd className="green-text">{formatINR(subsidy)}</dd><dt>Net system cost</dt><dd>{formatINR(netCost)}</dd><dt>Estimated payback</dt><dd>{payback.toFixed(1)} years</dd></dl></div></div>
-          <div className="modal-foot"><button className="button button-quiet" onClick={() => setReviewOpen(false)}>Reject / go back</button><button className="button button-primary" disabled={submitting || blockers.length > 0} onClick={authorizeSubmission}>{submitting ? 'Sending…' : 'Authorize & submit'} <span>→</span></button></div>
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="brand"><div className="brand-mark">☼</div><div><strong>rooftop<span>.</span></strong><small>SUBSIDY ASSISTANT</small></div></div>
+      <div className="workspace-label">MISSION CONTROL</div>
+      <nav className="nav-list"><button className="nav-item selected"><span className="nav-icon">▦</span>New application</button><button className="nav-item" onClick={startNew}><span className="nav-icon">◷</span>Start over</button></nav>
+      <div className="sidebar-bottom"><div className="system-card"><span className="status-dot" /><div><strong>Demo services</strong><small>Agent API · mock portal</small></div></div><div className="profile"><div className="avatar">AI</div><div><strong>Operator workspace</strong><small>Human approval enabled</small></div></div></div>
+    </aside>
+    <div className="main-area">
+      <header className="topbar"><div className="breadcrumbs">Applications <span>/</span><strong>New evaluation</strong></div><div className="topbar-right"><div className="env-pill"><span className="status-dot" />DEMO ENVIRONMENT</div><a className="button button-quiet" href={PORTAL_URL} target="_blank" rel="noreferrer">Open mock portal ↗</a></div></header>
+      <main className="page-content">
+        <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ROOFTOP SOLAR · APPLICATION REVIEW</div><h1>Subsidy <span>Mission Control</span></h1><p>Evaluate application details, inspect evidence, then approve a simulated portal filing.</p></div>{(workflow?.state === 'human_review_required' || workflow?.state === 'portal_queued') && <button className="button button-primary" onClick={() => workflow.state === 'portal_queued' ? approve() : setReview(true)}>{workflow.state === 'portal_queued' ? 'Retry portal submission' : 'Review and approve'} →</button>}</div>
+        <section className="summary-grid">
+          <Summary label="WORKFLOW" value={workflow?.workflow_id || '—'} foot="Evaluation reference" tone="green" icon="⌘" />
+          <Summary label="STATUS" value={workflow?.state.replaceAll('_', ' ') || 'Awaiting intake'} foot={workflow?.human_approval_required ? 'Waiting for your review' : workflow ? workflow.issues.length + ' open issue(s)' : 'Submit details to begin'} tone={workflow?.issues.length ? 'amber' : 'blue'} icon="◷" />
+          <Summary label="EST. SUBSIDY" value={workflow?.financial_summary ? '₹' + workflow.financial_summary.estimated_subsidy_inr.toLocaleString('en-IN') : '—'} foot="Indicative calculation" tone="violet" icon="₹" />
+          <Summary label="PORTAL APPLICATION" value={workflow?.application_id || '—'} foot={workflow?.application_id ? 'Simulated portal receipt' : 'Not submitted'} tone="green" icon="↗" />
         </section>
-      </div>}
+        {error && <div className="notice notice-warning"><span className="notice-symbol">!</span>{error}<button onClick={() => setError('')}>×</button></div>}
+        {workflow?.issues.map((issue) => <div className="notice notice-warning" key={issue}><span className="notice-symbol">!</span>{issue}</div>)}
+        {workflow?.state === 'submitted' && <div className="notice notice-success"><span className="notice-symbol">✓</span>Mock portal accepted the filing. This is a demonstration receipt, not a government approval.</div>}
+
+        <div className="mission-grid">
+          <section className="panel">
+            <PanelHeading kicker="STEP 01 · INTAKE" title="Applicant information" subtitle="Enter utility and project details for an initial assessment." icon="＋" />
+            <form onSubmit={evaluate}>
+              <Field label="Applicant name"><input required minLength={2} value={form.applicant_name} onChange={(e) => update('applicant_name', e.target.value)} placeholder="e.g. Asha Sharma" /></Field>
+              <div className="form-grid">
+                <Field label="State"><input required value={form.state} onChange={(e) => update('state', e.target.value)} placeholder="Maharashtra" /></Field>
+                <Field label="Applicant type"><select value={form.applicant_type} onChange={(e) => update('applicant_type', e.target.value as Intake['applicant_type'])}><option value="owner">Owner</option><option value="tenant">Tenant</option></select></Field>
+                <Field label="Consumer number"><input required minLength={8} maxLength={16} pattern="[A-Za-z0-9]{8,16}" value={form.consumer_number} onChange={(e) => update('consumer_number', e.target.value)} placeholder="8–16 letters or digits" /></Field>
+                <Field label="DISCOM code"><input required value={form.discom_code} onChange={(e) => update('discom_code', e.target.value)} placeholder="e.g. MSEDCL" /></Field>
+                <Field label="Sanctioned load (kW)"><input required type="number" min="0.1" step="0.1" value={form.sanctioned_load_kw} onChange={(e) => update('sanctioned_load_kw', Number(e.target.value))} /></Field>
+                <Field label="Planned capacity (kW)"><input required type="number" min="0.1" step="0.1" value={form.proposed_capacity_kw} onChange={(e) => update('proposed_capacity_kw', Number(e.target.value))} /></Field>
+                <Field label="Installer ID"><input required value={form.installer_id} onChange={(e) => update('installer_id', e.target.value)} placeholder="Installer registry ID" /></Field>
+                <Field label="Tariff (₹ / kWh)"><input required type="number" min="0.1" step="0.1" value={form.tariff_inr_per_kwh} onChange={(e) => update('tariff_inr_per_kwh', Number(e.target.value))} /></Field>
+              </div>
+              <div className="form-section-title">DECLARATIONS AND DOCUMENT CHECKLIST</div>
+              <label className="check-line"><input type="checkbox" checked={form.owns_rooftop} onChange={(e) => update('owns_rooftop', e.target.checked)} /> Rooftop ownership is established</label>
+              <label className="check-line"><input type="checkbox" checked={form.has_grid_connection} onChange={(e) => update('has_grid_connection', e.target.checked)} /> Active grid connection</label>
+              <label className="check-line"><input type="checkbox" checked={form.installer_empanelled} onChange={(e) => update('installer_empanelled', e.target.checked)} /> Installer marked empanelled (demo declaration)</label>
+              {form.applicant_type === 'tenant' && <label className="noc-field full"><input type="checkbox" checked={form.landlord_noc_uploaded} onChange={(e) => update('landlord_noc_uploaded', e.target.checked)} /><span><strong>Landlord NOC recorded</strong><small>Authenticity is not independently verified.</small></span><span className="tiny-tag warning">REQUIRED</span></label>}
+              <Field label="Required documents (comma separated)"><input value={form.required_documents} onChange={(e) => update('required_documents', e.target.value)} placeholder="Electricity bill, identity proof" /></Field>
+              <Field label="Documents recorded as uploaded (comma separated)"><input value={form.uploaded_documents} onChange={(e) => update('uploaded_documents', e.target.value)} placeholder="Electricity bill" /></Field>
+              <button className="button button-primary full-button" type="submit" disabled={busy}>{busy ? 'Processing…' : workflow ? 'Re-evaluate application' : 'Evaluate application'} <span className="button-arrow">→</span></button>
+              <p className="form-footnote">Demo only · this build does not process uploaded document contents.</p>
+            </form>
+          </section>
+
+          <div className="center-column">
+            <section className="panel"><PanelHeading kicker="STEP 02 · AGENT WORKFLOW" title="Live evaluation" subtitle="Deterministic checks and human review gate." icon="⌁" /><div className="live-pill live-active"><span />{workflow ? 'WORKFLOW EVENTS' : 'READY FOR INTAKE'}</div>
+              <div className="workflow-list">{nodes.map(([node, title, subtitle], index) => {
+                const event = events.find((item) => item.node === node)
+                const done = event?.status === 'completed' || event?.status === 'submitted'
+                const blocked = event?.status === 'blocked'
+                const active = event?.status === 'waiting'
+                return <div className={'workflow-node ' + (done ? 'done ' : '') + (active ? 'active ' : '') + (blocked ? 'blocked' : '')} key={node}>
+                  <div className="node-rail"><div className="node-circle">{done ? '✓' : blocked ? '!' : index + 1}</div>{index < 4 && <div className="node-line" />}</div>
+                  <div className="node-content"><strong>{title}</strong><span>{event?.message || subtitle}</span></div><span className="node-state">{event?.status?.toUpperCase() || 'WAITING'}</span>
+                </div>
+              })}</div>
+              {workflow?.financial_summary && <div className="finance-foot"><div><span>Annual generation</span><strong>{workflow.financial_summary.estimated_annual_generation_kwh.toLocaleString('en-IN')} kWh</strong></div><div><span>Estimated payback</span><strong>{workflow.financial_summary.estimated_payback_years} years</strong></div></div>}
+            </section>
+            {workflow?.state === 'human_review_required' && <section className="panel next-panel"><div className="section-kicker">NEXT ACTION</div><div className="next-icon">✓</div><h3>Ready for your review</h3><p>Check the payload and evidence before sending it to the demo portal.</p><button className="button button-primary full-button" onClick={() => setReview(true)}>Open review diff →</button></section>}
+          </div>
+
+          <div className="right-column">
+            <section className="panel evidence-panel"><PanelHeading kicker="STEP 03 · EVIDENCE" title="Verification trail" subtitle="Rule outcomes and stated basis." icon="⌕" /><div className="evidence-status"><span className="status-dot amber-dot" />{workflow ? workflow.evidence_log.length + ' CHECKS RECORDED' : 'NO EVIDENCE YET'}</div>
+              <div className="evidence-list">{workflow?.evidence_log.map((item, index) => <div className="evidence-item" key={item.rule + index}><span className="evidence-index">{String(index + 1).padStart(2, '0')}</span><span className="evidence-item-copy"><strong>{item.rule.replaceAll('_', ' ')}</strong><small>{item.outcome} · {new Date(item.checked_at).toLocaleString()}</small><small>{item.excerpt}</small>{item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">View source</a>}</span></div>)}
+              {!workflow && <p className="form-footnote">Evidence entries appear after evaluation. Applicant declarations are not independent verification.</p>}</div>
+              {workflow && <div className="evidence-disclaimer"><span>ⓘ</span><p>Registry and document authenticity checks are not connected. Entries without a source URL reflect submitted information.</p></div>}
+            </section>
+            <section className="panel"><PanelHeading kicker="DEMO TARGET" title="Mock DISCOM portal" subtitle="Standalone simulated filing target." icon="↗" /><p className="form-footnote">The agent sends the approved payload to this portal. No government system is contacted.</p><a className="button button-outline full-button" href={PORTAL_URL} target="_blank" rel="noreferrer">Open portal ↗</a></section>
+          </div>
+        </div>
+        <footer className="page-footer"><span>Rooftop Solar Subsidy Assistant · Demonstration only</span><span>Not a government service or eligibility determination</span></footer>
+      </main>
     </div>
-  )
+    {review && workflow && <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setReview(false) }}>
+      <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
+        <div className="modal-header"><div><div className="eyebrow">HUMAN-IN-THE-LOOP GATE</div><h2 id="review-title">Review before portal submission</h2><p>Approval submits the prepared data to the simulated portal.</p></div><button className="modal-close" aria-label="Close review" onClick={() => setReview(false)}>×</button></div>
+        <div className="review-banner"><span>✓</span><div><strong>Application checks are ready</strong><p>This is a synthetic filing and does not create a government application.</p></div></div>
+        <div className="diff-grid">{[workflow.application_parameters, {
+          applicant_name: workflow.application_parameters.applicant_name,
+          consumer_number: workflow.application_parameters.consumer_number,
+          discom_code: workflow.application_parameters.discom_code,
+          state: workflow.application_parameters.state,
+          planned_capacity_kw: workflow.application_parameters.proposed_capacity_kw,
+          sanctioned_load_kw: workflow.application_parameters.sanctioned_load_kw,
+          vendor_id: workflow.application_parameters.installer_id,
+        }].map((record, side) => <div className={'diff-card ' + (side ? 'normalized' : '')} key={side}><div className="diff-title">{side ? '02  MOCK PORTAL PAYLOAD' : '01  REVIEWED INTAKE'}</div><dl>{Object.entries(record).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd className={side ? 'green-text' : ''}>{Array.isArray(value) ? value.join(', ') || '—' : String(value)}</dd></div>)}</dl></div>)}</div>
+        <div className="modal-foot"><button className="button button-quiet" onClick={() => setReview(false)}>Back to application</button><button className="button button-primary" disabled={busy} onClick={approve}>{busy ? 'Submitting…' : 'Approve and submit'} →</button></div>
+      </section>
+    </div>}
+  </div>
 }
 
+function Summary({ label, value, foot, tone, icon }: { label: string; value: string; foot: string; tone: string; icon: string }) {
+  return <article className="summary-card"><div className="summary-label">{label}<span className={'summary-icon ' + tone}>{icon}</span></div><div className="summary-value status-value">{value}</div><div className="summary-foot">{foot}</div></article>
+}
+function PanelHeading({ kicker, title, subtitle, icon }: { kicker: string; title: string; subtitle: string; icon: string }) {
+  return <div className="panel-heading"><div><div className="section-kicker">{kicker}</div><h2>{title}</h2><p>{subtitle}</p></div><div className="step-icon">{icon}</div></div>
+}
+function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label> }
 export default App
+
+
+
+
