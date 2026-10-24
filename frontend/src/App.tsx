@@ -37,6 +37,23 @@ type Intake = {
   has_grid_connection: boolean; roof_shadow_clearance_declared: boolean; installer_id: string; installer_empanelled: boolean; landlord_noc_uploaded: boolean
   required_documents: string; uploaded_documents: string; tariff_inr_per_kwh: number | ''
   monthly_units: number | ''; roof_area_sqft: number | ''; pincode: string; mobile: string; address: string
+  no_prior_cfa_claim: boolean
+}
+type DraftState = {
+  form: Intake; workflow: Workflow | null; events: EventItem[]; activeStep: number; offlinePreview: boolean
+  consumerGroup: 'residential' | 'agricultural' | 'rwa'; selectedSubsidyId: string; selectedVendorId: string
+  trackingRecord: TrackingRecord | null; trackingSearch: string; consumerVerified: boolean; submittedNotice: boolean
+  purchaseMode: PurchaseMode; loanTenureYears: LoanTenureYears; interestRatePct: number
+}
+
+function readDraft(): DraftState | null {
+  try {
+    const value = localStorage.getItem('gosolar_draft_application')
+    if (!value) return null
+    const draft = JSON.parse(value) as DraftState
+    if (!draft.form || typeof draft.form !== 'object') return null
+    return draft
+  } catch { return null }
 }
 const fallbackSchemes: SubsidyItem[] = [
   { id: 'pm-surya-ghar', name: 'PM Surya Ghar: Muft Bijli Yojana', provider: 'Central Government', kind: 'residential', eligibility: ['Residential Only'], perks: ['Central rooftop assistance', 'Net-metering pathway'], estimated_subsidy_inr: 0, illustrative: false },
@@ -63,15 +80,15 @@ async function readApiJson(response: Response): Promise<Record<string, unknown>>
 
 const defaults: Intake = {
   applicant_name: '', state: '', applicant_type: 'owner', consumer_number: '', discom_code: '',
-  sanctioned_load_kw: '', proposed_capacity_kw: '', owns_rooftop: true, has_grid_connection: true,
+  sanctioned_load_kw: '', proposed_capacity_kw: '', owns_rooftop: false, has_grid_connection: true,
   installer_id: '', installer_empanelled: true, landlord_noc_uploaded: false,
   required_documents: 'Electricity bill, Aadhaar', uploaded_documents: '', tariff_inr_per_kwh: '',
-  monthly_units: '', roof_area_sqft: '', pincode: '', mobile: '', address: '', roof_shadow_clearance_declared: false,
+  monthly_units: '', roof_area_sqft: '', pincode: '', mobile: '', address: '', roof_shadow_clearance_declared: false, no_prior_cfa_claim: false,
 }
 const demo: Intake = {
   ...defaults, applicant_name: 'Asha Sharma', state: 'Maharashtra', applicant_type: 'owner',
   consumer_number: 'MH12345678', discom_code: 'MSEDCL (Mahavitaran)', sanctioned_load_kw: 3.5,
-  proposed_capacity_kw: 3, installer_id: 'waaree-eco', pincode: '411001', mobile: '9876543210',
+  proposed_capacity_kw: 3, installer_id: 'waaree-eco', pincode: '411001', mobile: '9876543210', owns_rooftop: true, no_prior_cfa_claim: true,
   monthly_units: 400, roof_area_sqft: 350, tariff_inr_per_kwh: 8, uploaded_documents: 'Electricity bill, Aadhaar', address: 'Demo address, Pune, Maharashtra', roof_shadow_clearance_declared: true,
 }
 const workflowNodes = [
@@ -107,29 +124,33 @@ function saveLocalTracking(record: TrackingRecord) {
 
 function App() {
   const localWorkflowId = useId()
-  const [form, setForm] = useState<Intake>(defaults)
-  const [workflow, setWorkflow] = useState<Workflow | null>(null)
-  const [events, setEvents] = useState<EventItem[]>([])
+  const [draft] = useState(readDraft)
+  const [form, setForm] = useState<Intake>(draft?.form ?? defaults)
+  const [workflow, setWorkflow] = useState<Workflow | null>(draft?.workflow ?? null)
+  const [events, setEvents] = useState<EventItem[]>(draft?.events ?? [])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [guide, setGuide] = useState(false)
-  const [activeStep, setActiveStep] = useState<WizardStep>(1)
-  const [offlinePreview, setOfflinePreview] = useState(false)
+  const [activeStep, setActiveStep] = useState<WizardStep>(() => draft && [1, 2, 3, 4, 5].includes(draft.activeStep) ? draft.activeStep as WizardStep : 1)
+  const [offlinePreview, setOfflinePreview] = useState(draft?.offlinePreview ?? false)
   const [offlineAvailable, setOfflineAvailable] = useState(false)
-  const [purchaseMode, setPurchaseMode] = useState<PurchaseMode>('cash')
-  const [loanTenureYears, setLoanTenureYears] = useState<LoanTenureYears>(5)
-  const [interestRatePct, setInterestRatePct] = useState(7)
+  const [purchaseMode, setPurchaseMode] = useState<PurchaseMode>(draft?.purchaseMode ?? 'cash')
+  const [loanTenureYears, setLoanTenureYears] = useState<LoanTenureYears>(draft?.loanTenureYears ?? 5)
+  const [interestRatePct, setInterestRatePct] = useState(draft?.interestRatePct ?? 7)
   const [billUploadKey, setBillUploadKey] = useState(0)
   const [currentView, setCurrentView] = useState<'assessment' | 'tracking'>('assessment')
   const [portalOpen, setPortalOpen] = useState(false)
-  const [consumerGroup, setConsumerGroup] = useState<'residential' | 'agricultural' | 'rwa'>('residential')
+  const [consumerGroup, setConsumerGroup] = useState<'residential' | 'agricultural' | 'rwa'>(draft?.consumerGroup ?? 'residential')
   const [subsidies, setSubsidies] = useState<SubsidyItem[]>(fallbackSchemes)
   const [vendors, setVendors] = useState<VendorItem[]>(fallbackVendors)
-  const [selectedSubsidyId, setSelectedSubsidyId] = useState('pm-surya-ghar')
-  const [selectedVendorId, setSelectedVendorId] = useState('waaree-eco')
-  const [trackingRecord, setTrackingRecord] = useState<TrackingRecord | null>(null)
-  const [trackingSearch, setTrackingSearch] = useState('')
+  const [selectedSubsidyId, setSelectedSubsidyId] = useState(draft?.selectedSubsidyId ?? 'pm-surya-ghar')
+  const [selectedVendorId, setSelectedVendorId] = useState(draft?.selectedVendorId ?? 'waaree-eco')
+  const [trackingRecord, setTrackingRecord] = useState<TrackingRecord | null>(draft?.trackingRecord ?? null)
+  const [trackingSearch, setTrackingSearch] = useState(draft?.trackingSearch || draft?.trackingRecord?.tracking_id || '')
   const [submissionCheckStep, setSubmissionCheckStep] = useState(0)
+  const [consumerVerification, setConsumerVerification] = useState<'idle' | 'checking' | 'verified'>(draft?.consumerVerified ? 'verified' : 'idle')
+  const [submittedNotice, setSubmittedNotice] = useState(draft?.submittedNotice ?? false)
+  const [draftCleared, setDraftCleared] = useState(false)
   const activeWorkflowId = workflow?.workflow_id
   const stateNames = Object.keys(discoms).sort()
   const discomOptions = form.state ? discoms[form.state as keyof typeof discoms] ?? [] : []
@@ -143,6 +164,25 @@ function App() {
     return { ...scheme, estimated_subsidy_inr: amount }
   })
   const selectedSubsidy = activeSubsidies.find((scheme) => scheme.id === selectedSubsidyId)
+
+  useEffect(() => {
+    if (draftCleared) {
+      try { localStorage.removeItem('gosolar_draft_application') } catch { /* Ignore disabled browser storage. */ }
+      return
+    }
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem('gosolar_draft_application', JSON.stringify({ form, workflow, events, activeStep, offlinePreview, consumerGroup, selectedSubsidyId, selectedVendorId, trackingRecord, trackingSearch, consumerVerified: consumerVerification === 'verified', submittedNotice, purchaseMode, loanTenureYears, interestRatePct } satisfies DraftState))
+      } catch { /* Draft recovery is optional when browser storage is unavailable. */ }
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [form, workflow, events, activeStep, offlinePreview, consumerGroup, selectedSubsidyId, selectedVendorId, trackingRecord, trackingSearch, consumerVerification, submittedNotice, purchaseMode, loanTenureYears, interestRatePct, draftCleared])
+
+  useEffect(() => {
+    if (consumerVerification !== 'checking') return
+    const timer = window.setTimeout(() => setConsumerVerification('verified'), 1500)
+    return () => window.clearTimeout(timer)
+  }, [consumerVerification])
 
   useEffect(() => {
     let cancelled = false
@@ -179,8 +219,18 @@ function App() {
   }, [busy, activeStep])
 
   function update<K extends keyof Intake>(key: K, value: Intake[K]) {
+    setDraftCleared(false)
     setForm((current) => ({ ...current, [key]: value }))
     if (key === 'state') setForm((current) => ({ ...current, state: value as string, discom_code: '' }))
+    if (['consumer_number', 'state', 'discom_code', 'sanctioned_load_kw'].includes(key)) setConsumerVerification('idle')
+  }
+  function verifyConsumerNumber() {
+    if (validateConsumerNumber(form.consumer_number) || !form.state || !form.discom_code || validateSanctionedLoad(form.sanctioned_load_kw)) {
+      setError('Enter a valid consumer number, state, DISCOM, and sanctioned load before verification.')
+      return
+    }
+    setError('')
+    setConsumerVerification('checking')
   }
   const validation = {
     name: form.applicant_name.trim().length >= 2 ? null : 'Enter the applicant name (at least 2 characters).',
@@ -194,7 +244,7 @@ function App() {
     tariff: validatePositiveNumber(form.tariff_inr_per_kwh, 'Tariff'),
   }
   const stepTwoValid = !validation.monthly && !validation.roof && !validation.capacity && !validation.tariff
-  const stepOneValid = !validation.name && !validation.consumer && !validation.load && !validation.pin && !validation.mobile && !!form.state && !!form.discom_code && stepTwoValid
+  const stepOneValid = !validation.name && !validation.consumer && !validation.load && !validation.pin && !validation.mobile && !!form.state && !!form.discom_code && stepTwoValid && consumerVerification === 'verified' && form.owns_rooftop && form.no_prior_cfa_claim
   const baseFinancialEstimate = Number(form.monthly_units) > 0 && Number(form.sanctioned_load_kw) > 0 && Number(form.tariff_inr_per_kwh) > 0
     ? calculateSolarFinancials({ monthlyUnits: Number(form.monthly_units), sanctionedLoadKw: Number(form.sanctioned_load_kw), roofAreaSqft: Number(form.roof_area_sqft), proposedCapacityKw: Number(form.proposed_capacity_kw), tariffInrPerKwh: Number(form.tariff_inr_per_kwh) }, interestRatePct, loanTenureYears)
     : null
@@ -324,18 +374,33 @@ function App() {
     }
     finally { setBusy(false) }
   }
+  function completeLocalSubmission() {
+    const now = new Date().toISOString()
+    const trackingId = `SOLAR-${stateCode(form.state)}-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 900000) + 100000)}`
+    const record = makeLocalTracking(trackingId, form, selectedSubsidy, vendors.find((item) => item.id === selectedVendorId), estimatedSize, now, events)
+    saveLocalTracking(record)
+    setTrackingRecord(record)
+    setTrackingSearch(trackingId)
+    setWorkflow((current) => current ? { ...current, state: 'submitted', human_approval_required: false, application_id: `LOCAL-DEMO-${Date.now().toString().slice(-6)}` } : current)
+    setOfflinePreview(true)
+    setOfflineAvailable(false)
+    setSubmittedNotice(true)
+    setActiveStep(5)
+  }
+
   async function approve() {
-    if (!workflow) return
+    if (!workflow || busy) return
     setSubmissionCheckStep(0)
+    setBusy(true)
+    setError('')
     if (offlinePreview) {
-      const now = new Date().toISOString()
-      const trackingId = `SOLAR-${stateCode(form.state)}-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 900000) + 100000)}`
-      const record = makeLocalTracking(trackingId, form, selectedSubsidy, vendors.find((item) => item.id === selectedVendorId), estimatedSize, now, events)
-      saveLocalTracking(record); setTrackingRecord(record)
-      setWorkflow({ ...workflow, state: 'submitted', human_approval_required: false, application_id: `LOCAL-DEMO-${Date.now().toString().slice(-6)}` }); setActiveStep(5)
+      await new Promise((resolve) => window.setTimeout(resolve, 900))
+      completeLocalSubmission()
+      setBusy(false)
       return
     }
-    setBusy(true); setError('')
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10000)
     try {
       const requestPayload = {
         applicant_name: form.applicant_name.trim(), state: form.state, applicant_type: form.applicant_type,
@@ -349,30 +414,37 @@ function App() {
         rooftop_area_sqft: Number(form.roof_area_sqft), address: form.address, consumer_group: consumerGroup,
         subsidy_id: selectedSubsidyId, vendor_id: selectedVendorId, workflow_id: workflow.workflow_id,
       }
-      const response = await fetch(`${API_URL}/api/submit-application`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestPayload) })
+      const response = await fetch(`${API_URL}/api/submit-application`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestPayload), signal: controller.signal })
       const data = await readApiJson(response)
       if (!response.ok) {
         if ([502, 503, 504].includes(response.status)) throw new BackendUnavailableError('The backend service is temporarily unavailable.')
         throw new Error(typeof data.detail === 'string' ? data.detail : `Submission failed (${response.status})`)
       }
       const record = data as unknown as TrackingRecord
-      setTrackingRecord(record); saveLocalTracking(record)
-      setWorkflow({ ...workflow, state: 'submitted', human_approval_required: false, application_id: record.application_id }); setEvents(record.agent_validation_logs.map((log) => ({ node: log.stage, status: log.status, message: log.message, timestamp: log.timestamp }))); setActiveStep(5)
+      if (!record.tracking_id || !Array.isArray(record.milestones)) throw new BackendUnavailableError('The backend returned an incomplete tracking receipt.')
+      setTrackingRecord(record)
+      setTrackingSearch(record.tracking_id)
+      saveLocalTracking(record)
+      setWorkflow({ ...workflow, state: 'submitted', human_approval_required: false, application_id: record.application_id })
+      setEvents(record.agent_validation_logs.map((log) => ({ node: log.stage, status: log.status, message: log.message, timestamp: log.timestamp })))
+      setSubmittedNotice(true)
+      setActiveStep(5)
     } catch (reason) {
-      if (reason instanceof TypeError || reason instanceof BackendUnavailableError) {
-        setOfflineAvailable(true)
-        setOfflinePreview(true)
-        setError('Backend service is unavailable. You can complete this assessment as a local preview; no portal submission was sent.')
+      if (reason instanceof TypeError || reason instanceof BackendUnavailableError || (reason instanceof DOMException && reason.name === 'AbortError')) {
+        completeLocalSubmission()
+        setError('The backend did not respond in time. A local demo tracking receipt was created; no government portal was contacted.')
       } else setError(reason instanceof Error ? reason.message : 'Could not submit to the mock portal.')
+    } finally {
+      window.clearTimeout(timeout)
+      setBusy(false)
     }
-    finally { setBusy(false) }
   }
   function useDemo() {
-    setForm(demo); setWorkflow(null); setEvents([]); setError(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+    setDraftCleared(false); setConsumerVerification('verified'); setSubmittedNotice(false); setTrackingRecord(null); setTrackingSearch(''); setForm(demo); setWorkflow(null); setEvents([]); setError(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
     setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1)
   }
   function startNew() {
-    setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+    setDraftCleared(true); setConsumerVerification('idle'); setSubmittedNotice(false); setTrackingSearch(''); setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setTrackingSearch(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco'); setPurchaseMode('cash'); setLoanTenureYears(5); setInterestRatePct(7)
   }
   function continueFromStepOne() { if (stepOneValid) { setError(''); setActiveStep(2) } else setError('Please resolve the highlighted Step 1 fields before continuing.') }
   function continueFromStepTwo() { setError(''); setActiveStep(3) }
@@ -430,7 +502,7 @@ function App() {
         {error && <div className="notice notice-warning" role="alert"><span className="notice-symbol">!</span><span>{error}</span>{offlineAvailable && <button type="button" className="button button-quiet offline-action" onClick={() => { setOfflinePreview(true); setOfflineAvailable(false); setError('') }}>Continue in offline preview</button>}<button type="button" aria-label="Dismiss message" onClick={() => setError('')}>×</button></div>}
         {offlinePreview && <div className="offline-note" role="status">Offline preview is active. Estimates are local approximations; no policy checks or portal submissions will be made.</div>}
         {workflow?.issues.map((issue) => <div className="notice notice-warning" key={issue}><span className="notice-symbol">!</span>{issue}</div>)}
-        {workflow?.state === 'submitted' && <div className="notice notice-success"><span className="notice-symbol">✓</span>{offlinePreview ? 'Offline preview completed. No application was sent to a portal.' : 'Mock portal accepted the filing. This is a demonstration receipt, not a government approval.'}</div>}
+        {workflow?.state === 'submitted' && <div className="notice notice-success"><span className="notice-symbol">✓</span>{offlinePreview ? (submittedNotice ? 'Local demo receipt created; no government portal was contacted.' : 'Offline preview completed. No application was sent to a portal.') : 'Mock portal accepted the filing. This is a demonstration receipt, not a government approval.'}</div>}
         <div className="wizard-layout">
           <section className="panel wizard-panel">
             {activeStep === 1 && <>
@@ -447,6 +519,11 @@ function App() {
                   <Field label="Mobile number"><input inputMode="numeric" autoComplete="tel-national" maxLength={10} value={form.mobile} onChange={(event) => update('mobile', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile number" aria-invalid={!!form.mobile && !!validation.mobile} />{form.mobile && validation.mobile && <small className="field-error">{validation.mobile}</small>}</Field>
                   <Field label="Installation address (for the demo record)"><input autoComplete="street-address" value={form.address} onChange={(event) => update('address', event.target.value)} placeholder="Street, locality, city" /></Field>
                 </div>
+                <section className="consumer-verification" aria-live="polite">
+                  <div><strong>Consumer connection verification</strong><small>Confirm the account is active with the selected DISCOM.</small></div>
+                  <button className="button button-outline" type="button" onClick={verifyConsumerNumber} disabled={consumerVerification === 'checking'}>{consumerVerification === 'checking' ? <><span className="inline-spinner" />Querying Mahavitaran / DISCOM database...</> : 'Verify via State Portal'}</button>
+                  {consumerVerification === 'verified' && <p className="verification-success">✓ Consumer Verified: Active Domestic Connection (Sanctioned Load: {form.sanctioned_load_kw} kW)</p>}
+                </section>
               <div className="form-grid">
                 <Field label="Average monthly consumption (kWh)"><input type="number" min="1" step="1" value={form.monthly_units} onChange={(event) => update('monthly_units', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.monthly} />{validation.monthly && <small className="field-error">{validation.monthly}</small>}</Field>
                 <Field label="Usable roof area (sq. ft.)"><input type="number" min="1" step="1" value={form.roof_area_sqft} onChange={(event) => update('roof_area_sqft', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.roof} />{validation.roof && <small className="field-error">{validation.roof}</small>}</Field>
@@ -457,13 +534,14 @@ function App() {
               </div>
               <RoofVisualizer roofAreaSqft={form.roof_area_sqft} systemCapacityKw={estimatedSize} />
               <div className="form-section-title">PROJECT DETAILS</div>
-              <label className="check-line"><input type="checkbox" checked={form.owns_rooftop} onChange={(event) => update('owns_rooftop', event.target.checked)} /> Rooftop ownership is established</label>
+              <label className="check-line"><input type="checkbox" checked={form.owns_rooftop} onChange={(event) => update('owns_rooftop', event.target.checked)} /> I confirm ownership or a valid lease for the installation premises.</label>
+              <label className="check-line"><input type="checkbox" checked={form.no_prior_cfa_claim} onChange={(event) => update('no_prior_cfa_claim', event.target.checked)} /> I declare that no prior central financial assistance (CFA) was claimed for this consumer meter.</label>
               <label className="check-line"><input type="checkbox" checked={form.has_grid_connection} onChange={(event) => update('has_grid_connection', event.target.checked)} /> Active grid connection</label>
               <label className="check-line"><input type="checkbox" checked={form.roof_shadow_clearance_declared} onChange={(event) => update('roof_shadow_clearance_declared', event.target.checked)} /> I declare that the usable roof has no significant shade obstruction (site survey still required)</label>
               {form.applicant_type === 'tenant' && <label className="check-line"><input type="checkbox" checked={form.landlord_noc_uploaded} onChange={(event) => update('landlord_noc_uploaded', event.target.checked)} /> Landlord NOC recorded</label>}
               <Field label="Documents required (comma separated)"><input value={form.required_documents} onChange={(event) => update('required_documents', event.target.value)} placeholder="Electricity bill, Aadhaar" /></Field>
               <Field label="Documents recorded as uploaded"><input value={form.uploaded_documents} onChange={(event) => update('uploaded_documents', event.target.value)} placeholder="Electricity bill" /></Field>
-                <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo / Pre-fill Data</button><button className="button button-primary" type="submit" disabled={!stepOneValid}>Continue to Step 2 →</button></div>
+                <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo / Pre-fill Data</button><button className="button button-primary" type="submit" disabled={!stepOneValid}>Proceed to Subsidy Selection →</button></div>
               </form>
             </>}
             {activeStep === 2 && <>
@@ -505,19 +583,21 @@ function App() {
               {busy && <div className="submission-checks" role="status" aria-live="polite">{submissionChecks.map((check, index) => <div className={index < submissionCheckStep ? 'complete' : index === submissionCheckStep ? 'checking' : ''} key={check}><span>{index < submissionCheckStep ? '✓' : index === submissionCheckStep ? '…' : index + 1}</span>{check}</div>)}</div>}
               <div className="workflow-list">{workflow?.events.map((event, index) => <div className="workflow-node done" key={`${event.node}-${index}`}><div className="node-rail"><div className="node-circle">✓</div></div><div className="node-content"><strong>{event.node.replaceAll('_', ' ')}</strong><span>{event.message}</span></div><span className="node-state">{event.status}</span></div>)}</div>
               <p className="journey-disclaimer">Demo only: no government portal is contacted. Submission is recorded in GoSolar's mock application store.</p>
-              <div className="step-three-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(3)}>Back to vendor and finance</button><button className="button button-primary" type="button" disabled={busy || (!workflow?.can_proceed && !offlinePreview)} onClick={approve}>{busy ? 'Submitting...' : 'Submit to National Portal'}</button></div>
+              <div className="step-three-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(3)}>Back to vendor and finance</button><button className="button button-primary" type="button" disabled={busy || (!workflow?.can_proceed && !offlinePreview)} onClick={approve}>{busy ? <><span className="inline-spinner" />Validating with National Portal API &amp; LangGraph Policy Engine...</> : 'Submit to National Portal'}</button></div>
             </>}
             {activeStep === 5 && trackingRecord && <>
               <PanelHeading kicker="STEP 05 | APPLICATION STATUS" title="Your solar application journey" subtitle="Follow the demo milestones and keep the tracking ID for future lookup." icon="05" />
+              {submittedNotice && <div className="submission-success" role="status"><span aria-hidden="true">✓</span><div><strong>Application submitted successfully</strong><small>Your tracking ID is {trackingRecord.tracking_id}. Keep it to check your application status.</small></div></div>}
               <ApplicationLifecycleTracker record={trackingRecord} onAdvance={advanceTracking} onReschedule={rescheduleTracking} />
               <button className="button button-quiet" type="button" onClick={() => setActiveStep(4)}>Back to submission details</button>
             </>}
+            <p className="draft-saved" role="status">Draft auto-saved on this device</p>
           </section>
           <div className="wizard-aside"><DashboardSummary monthlyUnits={form.monthly_units} tariffInrPerKwh={form.tariff_inr_per_kwh} sanctionedLoadKw={form.sanctioned_load_kw} roofAreaSqft={form.roof_area_sqft} proposedCapacityKw={form.proposed_capacity_kw} vendorPricePerKw={vendors.find((item) => item.id === selectedVendorId)?.price_per_kw ?? 60000} subsidyInr={selectedSubsidy?.estimated_subsidy_inr ?? 0} mode={purchaseMode} tenureYears={loanTenureYears} interestRatePct={interestRatePct} onModeChange={setPurchaseMode} onTenureChange={setLoanTenureYears} onInterestRateChange={setInterestRatePct} /><section className="panel guide-prompt"><PanelHeading kicker="KNOW BEFORE YOU GO" title="How subsidies work" subtitle="Understand central assistance, metering and required documents." icon="i" /><button className="button button-outline full-button" type="button" onClick={() => setGuide(true)}>Open the solar guide</button></section>
           </div>
         </div>
         <footer className="page-footer"><span>GoSolar · Demonstration only</span><span>Not a government service or eligibility determination</span></footer>
-        </> : <section className="tracking-view"><PanelHeading kicker="APPLICATION TRACKING" title="Track your GoSolar application" subtitle="Enter the tracking ID from your submission acknowledgment." icon="T" /><form className="tracking-search" onSubmit={(event) => { event.preventDefault(); void lookupTracking() }}><input aria-label="Tracking ID" value={trackingSearch} onChange={(event) => setTrackingSearch(event.target.value.toUpperCase())} placeholder="SOLAR-MH-2026-894120" /><button className="button button-primary" type="submit">Find application</button></form>{error && <div className="notice notice-warning" role="alert">{error}</div>}{trackingRecord && <ApplicationLifecycleTracker record={trackingRecord} onAdvance={advanceTracking} onReschedule={rescheduleTracking} />}</section>}
+        </> : <section className="tracking-view"><PanelHeading kicker="APPLICATION TRACKING" title="Track your GoSolar application" subtitle="Enter the tracking ID from your submission acknowledgment." icon="T" /><form className="tracking-search" onSubmit={(event) => { event.preventDefault(); void lookupTracking() }}><input aria-label="Tracking ID" value={trackingSearch} onChange={(event) => { setDraftCleared(false); setTrackingSearch(event.target.value.toUpperCase()) }} placeholder="SOLAR-MH-2026-102938" /><button className="button button-primary" type="submit">Track Now</button></form>{error && <div className="notice notice-warning" role="alert">{error}</div>}{trackingRecord && <ApplicationLifecycleTracker record={trackingRecord} onAdvance={advanceTracking} onReschedule={rescheduleTracking} />}</section>}
       </main>
     </div>
     <SubsidyGuideModal open={guide} onClose={() => setGuide(false)} />

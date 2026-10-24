@@ -1,14 +1,14 @@
 /* Keep the compact dashboard readable while retaining its existing layout. */
-body { font-size: 1.125rem; line-height: 1.55; }
+body { font-size: 1rem; line-height: 1.55; }
 .page-heading p, .panel-heading p, .field>span, .field input:not([type=range]), .field select,
 .field small, .summary-label, .summary-foot, .metric-label, .metric-caption,
 .journey-disclaimer, .journey-net, .journey-perks, .vendor-specs, .tracking-search input,
 .lifecycle-step small, .agent-log p, .portal-review span, .portal-review small {
-  font-size: max(0.9rem, 1em) !important;
+  font-size: 0.9rem !important;
   line-height: 1.5;
 }
-.panel-heading h2, .journey-section-title { font-size: 1.35rem !important; line-height: 1.25; }
-.summary-value { font-size: 2rem !important; }
+.panel-heading h2, .journey-section-title { font-size: 1.25rem !important; line-height: 1.25; }
+.summary-value { font-size: 1.65rem !important; }
 .summary-value small { font-size: 0.9rem !important; }
 .field>span, .journey-card strong, .vendor-card strong, .portal-review strong,
 .lifecycle-step strong { font-weight: 700; color: #243b2b; }
@@ -67,12 +67,35 @@ body { font-size: 1.125rem; line-height: 1.55; }
 @media (max-width: 520px) { .tracking-banner, .lifecycle-actions { align-items: stretch; flex-direction: column; } .wizard-progress-list { gap: 5px !important; } .wizard-step-copy strong { font-size: .68rem; } }
 
 /* Readability overrides for the complete five-step journey. */
-.field > span { font-size: 1.05rem !important; font-weight: 600 !important; }
+.field > span { font-size: 0.98rem !important; font-weight: 600 !important; }
 .field input:not([type="checkbox"]):not([type="range"]), .field select {
-  font-size: 1.05rem !important;
-  padding: 0.75rem 1rem !important;
-  min-height: 2.9rem;
+  font-size: 1rem !important;
+  padding: 0.625rem 0.875rem !important;
+  min-height: 2.65rem;
 }
 .page-heading h1 { font-size: clamp(2rem, 3.1vw, 2.6rem); }
-.panel-heading h2, .journey-section-title { font-size: 1.45rem !important; }
-.summary-value, .dashboard-summary-metric dd { font-size: 2rem !important; font-weight: 800; color: #174d2b; }
+.panel-heading h2, .journey-section-title { font-size: 1.25rem !important; }
+.summary-value, .dashboard-summary-metric dd { font-size: 1.65rem !important; font-weight: 800; color: #174d2b; }
+
+.field small, .journey-disclaimer, .panel-heading p, .guide-content p { font-size: 0.9rem !important; }
+.journey-card-top strong, .vendor-card strong { font-size: 1.15rem; }
+.consumer-verification { display: grid; gap: 10px; margin: 16px 0; padding: 14px; border: 1px solid #e1ebe1; border-radius: 10px; background: #f8fbf8; }
+.consumer-verification > div { display: grid; gap: 4px; }
+.consumer-verification > div strong { font-size: 1rem; color: #29412f; }
+.consumer-verification > div small { color: #748177; font-size: .88rem; }
+.consumer-verification .button { justify-self: start; }
+.verification-success { margin: 0; padding: 10px 12px; border-radius: 8px; background: #eaf7ed; color: #23713a; font-size: .92rem; font-weight: 700; }
+.inline-spinner { display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px; border: 2px solid #b9d8c0; border-top-color: #2d9250; border-radius: 50%; animation: bill-spin .75s linear infinite; }
+.draft-saved { margin: 14px 0 0; color: #78907d; font-size: .8rem; text-align: right; }
+.submission-success { display: flex; gap: 12px; align-items: center; margin: 14px 0; padding: 15px; border: 1px solid #bce0c3; border-radius: 11px; background: #edf8ef; color: #236f38; }
+.submission-success > span { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; background: #d8f0de; font-weight: 900; }
+.submission-success div { display: grid; gap: 4px; }
+.submission-success small { color: #52765a; }
+.copy-toast { margin: 8px 0; padding: 8px 11px; border-radius: 7px; background: #eaf7ed; color: #26743d; font-size: .86rem; }
+.metric-skeleton { display: inline-block; width: 82px; height: 1.15em; border-radius: 6px; background: linear-gradient(90deg, #edf2ed 25%, #dfe9e0 50%, #edf2ed 75%); background-size: 200% 100%; animation: metric-shimmer 1s ease-in-out infinite; vertical-align: middle; }
+.metric-calculated { animation: metric-fade-in .22s ease-out; }
+@keyframes metric-shimmer { to { background-position: -200% 0; } }
+@keyframes metric-fade-in { from { opacity: .35; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+.guide-flow { display: grid; gap: 8px; margin: 10px 0 0; padding-left: 22px; color: #5c6c60; font-size: .9rem; }
+.guide-flow li { padding-left: 3px; line-height: 1.5; }
+.guide-content h3 { font-size: 1.15rem; }

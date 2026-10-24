@@ -17,7 +17,8 @@ export default function ApplicationLifecycleTracker({ record, onAdvance, onResch
     printable.document.close(); printable.print()
   }
   return <section className="panel lifecycle-panel">
-    <div className="tracking-banner"><div><small>APPLICATION TRACKING ID</small><strong>{record.tracking_id}</strong></div><button className="button button-outline" type="button" onClick={copyId}>{copied ? 'Copied' : 'Copy Tracking ID'}</button></div>
+    <div className="tracking-banner"><div><small>APPLICATION TRACKING ID</small><strong className="tracking-id-badge">{record.tracking_id}</strong></div><button className="button button-outline" type="button" onClick={copyId}>{copied ? 'Copied' : 'Copy Tracking ID'}</button></div>
+    {copied && <div className="copy-toast" role="status" aria-live="polite">Tracking ID copied to clipboard.</div>}
     <p className="journey-disclaimer">Demo application status · {record.status.replaceAll('_', ' ')} · Updated {new Date(record.updated_at).toLocaleString()}</p>
     <ol className="lifecycle-list">{record.milestones.map((step, index) => <li className={`lifecycle-step ${step.status}`} key={step.title}><span className="lifecycle-marker">{step.status === 'completed' ? '✓' : index + 1}</span><div><strong>{step.title}</strong><small>{step.timestamp ? new Date(step.timestamp).toLocaleString() : step.status === 'in_progress' ? 'In progress' : 'Pending'}</small></div></li>)}</ol>
     <div className="lifecycle-actions"><button type="button" className="button button-outline" onClick={downloadDocket}>Download Submission Docket</button><button type="button" className="button button-outline" onClick={onReschedule}>Reschedule Site Survey</button><button type="button" className="button button-primary" disabled={record.current_stage >= record.milestones.length - 1} onClick={onAdvance}>Simulate Next Stage</button></div>

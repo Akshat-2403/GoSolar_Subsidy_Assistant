@@ -1,5 +1,6 @@
-﻿import type { LoanTenureYears, PurchaseMode } from '../utils/calculations'
-import { applySolarPriceOverrides, calculateSolarFinancials } from '../utils/calculations'
+﻿import { useEffect, useRef, useState } from 'react'
+import type { LoanTenureYears, PurchaseMode } from '../utils/calculations'
+import { applySolarPriceOverrides, calculateSolarFinancials, type SolarFinancialEstimate } from '../utils/calculations'
 import FinancialPlan from './FinancialPlan'
 import './components.css'
 
@@ -24,13 +25,31 @@ function money(value: number) {
 }
 
 export default function DashboardSummary({ monthlyUnits, tariffInrPerKwh, sanctionedLoadKw, roofAreaSqft, proposedCapacityKw, vendorPricePerKw, subsidyInr, mode, tenureYears, interestRatePct, onModeChange, onTenureChange, onInterestRateChange }: Props) {
-  const ready = Number(monthlyUnits) > 0 && Number(sanctionedLoadKw) > 0 && Number(tariffInrPerKwh) > 0
-  const baseEstimate = ready ? calculateSolarFinancials({
-    monthlyUnits: Number(monthlyUnits), sanctionedLoadKw: Number(sanctionedLoadKw),
-    roofAreaSqft: Number(roofAreaSqft), proposedCapacityKw: Number(proposedCapacityKw),
-    tariffInrPerKwh: Number(tariffInrPerKwh),
-  }, interestRatePct, tenureYears) : null
-  const estimate = applySolarPriceOverrides(baseEstimate, vendorPricePerKw, subsidyInr, interestRatePct, tenureYears)
+  const [estimate, setEstimate] = useState<SolarFinancialEstimate | null>(null)
+  const [calculating, setCalculating] = useState(false)
+  const calculatedInitially = useRef(false)
+  useEffect(() => {
+    const calculate = () => {
+      const ready = Number(monthlyUnits) > 0 && Number(sanctionedLoadKw) > 0 && Number(tariffInrPerKwh) > 0
+      const baseEstimate = ready ? calculateSolarFinancials({
+        monthlyUnits: Number(monthlyUnits), sanctionedLoadKw: Number(sanctionedLoadKw),
+        roofAreaSqft: Number(roofAreaSqft), proposedCapacityKw: Number(proposedCapacityKw),
+        tariffInrPerKwh: Number(tariffInrPerKwh),
+      }, interestRatePct, tenureYears) : null
+      return applySolarPriceOverrides(baseEstimate, vendorPricePerKw, subsidyInr, interestRatePct, tenureYears)
+    }
+    if (!calculatedInitially.current) {
+      calculatedInitially.current = true
+      setEstimate(calculate())
+      return
+    }
+    setCalculating(true)
+    const timer = window.setTimeout(() => {
+      setEstimate(calculate())
+      setCalculating(false)
+    }, 750)
+    return () => window.clearTimeout(timer)
+  }, [monthlyUnits, sanctionedLoadKw, tariffInrPerKwh, roofAreaSqft, proposedCapacityKw, vendorPricePerKw, subsidyInr, interestRatePct, tenureYears])
   const metrics = [
     { label: 'Recommended system size', value: estimate ? `${estimate.systemCapacityKw.toFixed(1)} kW` : '-- kW' },
     { label: 'Estimated subsidy', value: estimate ? money(estimate.subsidyInr) : '₹ --' },
@@ -39,12 +58,12 @@ export default function DashboardSummary({ monthlyUnits, tariffInrPerKwh, sancti
   ]
 
   return <aside className="dashboard-summary" aria-label="Live rooftop solar estimates" aria-live="polite">
-    <div className="dashboard-summary-heading"><p className="guide-eyebrow">LIVE ESTIMATE</p><h2>Your solar snapshot</h2><p>{estimate ? 'Updates as you enter your details.' : 'Enter your monthly consumption, sanctioned load, and tariff to see live estimates.'}</p></div>
+    <div className="dashboard-summary-heading"><p className="guide-eyebrow">LIVE ESTIMATE</p><h2>Your solar snapshot</h2><p>{calculating ? 'Calculating solar generation & subsidy curves...' : estimate ? 'Updates as you enter your details.' : 'Enter your monthly consumption, sanctioned load, and tariff to see live estimates.'}</p></div>
     <dl className="dashboard-summary-metrics">
       {metrics.map((metric) => <div className="dashboard-summary-metric" key={metric.label}>
-        <dt>{metric.label}</dt><dd>{metric.value}</dd>
+        <dt>{metric.label}</dt><dd className={calculating ? 'metric-calculating' : 'metric-calculated'}>{calculating ? <span className="metric-skeleton" aria-label="Calculating estimate" /> : metric.value}</dd>
       </div>)}
     </dl>
-    <FinancialPlan estimate={estimate} mode={mode} tenureYears={tenureYears} interestRatePct={interestRatePct} onModeChange={onModeChange} onTenureChange={onTenureChange} onInterestRateChange={onInterestRateChange} compact />
+    <FinancialPlan estimate={calculating ? null : estimate} mode={mode} tenureYears={tenureYears} interestRatePct={interestRatePct} onModeChange={onModeChange} onTenureChange={onTenureChange} onInterestRateChange={onInterestRateChange} compact />
   </aside>
 }

@@ -67,18 +67,18 @@ export function calculateMonthlyEmi(principalInr: number, annualInterestRatePct 
 export function calculateSolarFinancials(inputs: SolarFinancialInputs, annualInterestRatePct = 7, tenureYears: LoanTenureYears = 5): SolarFinancialEstimate {
   const monthlyUnits = Math.max(0, inputs.monthlyUnits)
   const sanctionedLoad = Math.max(0, inputs.sanctionedLoadKw)
-  const roofCapacity = Math.max(0, inputs.roofAreaSqft / 80)
-  const requestedCapacity = inputs.proposedCapacityKw > 0 ? inputs.proposedCapacityKw : Number.POSITIVE_INFINITY
-  const systemCapacityKw = Math.max(0, Math.min(sanctionedLoad, roofCapacity || Number.POSITIVE_INFINITY, requestedCapacity, monthlyUnits / 120))
+  const roofCapacity = Math.max(0, Math.floor(inputs.roofAreaSqft / 100))
+  const consumptionCapacity = Math.max(0, Math.ceil(monthlyUnits / 120))
+  const recommendedCapacity = Math.min(roofCapacity, consumptionCapacity)
+  const requestedCapacity = inputs.proposedCapacityKw > 0 ? inputs.proposedCapacityKw : recommendedCapacity
+  const systemCapacityKw = Math.max(0, Math.min(sanctionedLoad, recommendedCapacity, requestedCapacity))
   const grossSystemCostInr = estimateSystemCost(systemCapacityKw)
   const subsidyInr = calculateSubsidy(systemCapacityKw)
   const netPayableInr = Math.max(0, grossSystemCostInr - subsidyInr)
-  const annualGenerationKwh = Math.round(systemCapacityKw * 1_450)
-  // Self-consumption is capped by annual use; local slab rates are represented by the applicant's bill tariff.
-  const billableSolarUnits = Math.min(annualGenerationKwh * 0.8, monthlyUnits * 12)
-  const annualBillSavingsInr = Math.round(billableSolarUnits * Math.max(0, inputs.tariffInrPerKwh))
+  const annualGenerationKwh = Math.round(systemCapacityKw * 1_400)
+  const annualBillSavingsInr = Math.round(systemCapacityKw * 1_400 * Math.max(0, inputs.tariffInrPerKwh))
   const monthlyBillSavingsInr = Math.round(annualBillSavingsInr / 12)
-  const annualCo2OffsetKg = Math.round(annualGenerationKwh * 0.716)
+  const annualCo2OffsetKg = Math.round(systemCapacityKw * 1_050)
   const degradationFactor25Years = (1 - 0.995 ** 25) / (1 - 0.995)
   const twentyFiveYearNetSavingsInr = Math.round(annualBillSavingsInr * degradationFactor25Years - netPayableInr)
   const cashPaybackYears = annualBillSavingsInr > 0 ? Math.round(netPayableInr / annualBillSavingsInr * 10) / 10 : 0
