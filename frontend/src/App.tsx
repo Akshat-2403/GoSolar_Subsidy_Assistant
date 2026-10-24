@@ -71,7 +71,7 @@ const defaults: Intake = {
 const demo: Intake = {
   ...defaults, applicant_name: 'Asha Sharma', state: 'Maharashtra', applicant_type: 'owner',
   consumer_number: 'MH12345678', discom_code: 'MSEDCL (Mahavitaran)', sanctioned_load_kw: 3.5,
-  proposed_capacity_kw: 3, installer_id: 'DEMO-VENDOR-001', pincode: '411001', mobile: '9876543210',
+  proposed_capacity_kw: 3, installer_id: 'waaree-eco', pincode: '411001', mobile: '9876543210',
   monthly_units: 400, roof_area_sqft: 350, tariff_inr_per_kwh: 8, uploaded_documents: 'Electricity bill, Aadhaar', address: 'Demo address, Pune, Maharashtra', roof_shadow_clearance_declared: true,
 }
 const workflowNodes = [
@@ -193,8 +193,8 @@ function App() {
     capacity: Number(form.proposed_capacity_kw) > Number(form.sanctioned_load_kw) ? 'Planned capacity cannot exceed the sanctioned load.' : validatePositiveNumber(form.proposed_capacity_kw, 'Planned capacity'),
     tariff: validatePositiveNumber(form.tariff_inr_per_kwh, 'Tariff'),
   }
-  const stepOneValid = !validation.name && !validation.consumer && !validation.load && !validation.pin && !validation.mobile && !!form.state && !!form.discom_code
   const stepTwoValid = !validation.monthly && !validation.roof && !validation.capacity && !validation.tariff
+  const stepOneValid = !validation.name && !validation.consumer && !validation.load && !validation.pin && !validation.mobile && !!form.state && !!form.discom_code && stepTwoValid
   const baseFinancialEstimate = Number(form.monthly_units) > 0 && Number(form.sanctioned_load_kw) > 0 && Number(form.tariff_inr_per_kwh) > 0
     ? calculateSolarFinancials({ monthlyUnits: Number(form.monthly_units), sanctionedLoadKw: Number(form.sanctioned_load_kw), roofAreaSqft: Number(form.roof_area_sqft), proposedCapacityKw: Number(form.proposed_capacity_kw), tariffInrPerKwh: Number(form.tariff_inr_per_kwh) }, interestRatePct, loanTenureYears)
     : null
@@ -287,7 +287,7 @@ function App() {
 
   async function evaluate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!stepOneValid || !stepTwoValid) { setError('Complete all required fields in Steps 1 and 2 before evaluating.'); return }
+    if (!stepOneValid) { setError('Complete all required fields in Step 1 before evaluating.'); return }
     setError(''); setBusy(true)
     if (offlinePreview) {
       createOfflinePreview()
@@ -375,7 +375,7 @@ function App() {
     setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
   }
   function continueFromStepOne() { if (stepOneValid) { setError(''); setActiveStep(2) } else setError('Please resolve the highlighted Step 1 fields before continuing.') }
-  function continueFromStepTwo() { if (stepTwoValid) { setError(''); setActiveStep(3) } else setError('Please complete the required site and consumption fields.') }
+  function continueFromStepTwo() { setError(''); setActiveStep(3) }
   async function lookupTracking() {
     const key = trackingSearch.trim().toUpperCase()
     if (!key) { setError('Enter your GoSolar tracking ID.'); return }
@@ -434,7 +434,7 @@ function App() {
         <div className="wizard-layout">
           <section className="panel wizard-panel">
             {activeStep === 1 && <>
-              <PanelHeading kicker="STEP 01 · CONSUMER & DISCOM" title="Your electricity connection" subtitle="Enter the details shown on your latest electricity bill." icon="01" />
+              <PanelHeading kicker="STEP 01 - CONSUMER & FEASIBILITY" title="Your electricity connection and rooftop" subtitle="Enter your bill details, electricity use and roof information to check feasibility." icon="01" />
               <BillUpload key={billUploadKey} endpoint={BILL_OCR_URL} onExtracted={applyBillExtraction} />
               <form onSubmit={(event) => { event.preventDefault(); continueFromStepOne() }} noValidate>
                 <Field label="Applicant name"><input autoComplete="name" value={form.applicant_name} onChange={(event) => update('applicant_name', event.target.value)} placeholder="e.g. Asha Sharma" aria-invalid={!!validation.name} />{form.applicant_name && validation.name && <small className="field-error">{validation.name}</small>}</Field>
@@ -447,11 +447,6 @@ function App() {
                   <Field label="Mobile number"><input inputMode="numeric" autoComplete="tel-national" maxLength={10} value={form.mobile} onChange={(event) => update('mobile', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile number" aria-invalid={!!form.mobile && !!validation.mobile} />{form.mobile && validation.mobile && <small className="field-error">{validation.mobile}</small>}</Field>
                   <Field label="Installation address (for the demo record)"><input autoComplete="street-address" value={form.address} onChange={(event) => update('address', event.target.value)} placeholder="Street, locality, city" /></Field>
                 </div>
-                <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo / Pre-fill Data</button><button className="button button-primary" type="submit" disabled={!stepOneValid}>Continue to Step 2 →</button></div>
-              </form>
-            </>}
-            {activeStep === 2 && <>
-              <PanelHeading kicker="STEP 02 | SITE & SUBSIDY" title="Assess your rooftop and compare schemes" subtitle="Add usage, roof and connection details to view available subsidy options." icon="02" />
               <div className="form-grid">
                 <Field label="Average monthly consumption (kWh)"><input type="number" min="1" step="1" value={form.monthly_units} onChange={(event) => update('monthly_units', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.monthly} />{validation.monthly && <small className="field-error">{validation.monthly}</small>}</Field>
                 <Field label="Usable roof area (sq. ft.)"><input type="number" min="1" step="1" value={form.roof_area_sqft} onChange={(event) => update('roof_area_sqft', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.roof} />{validation.roof && <small className="field-error">{validation.roof}</small>}</Field>
@@ -468,12 +463,17 @@ function App() {
               {form.applicant_type === 'tenant' && <label className="check-line"><input type="checkbox" checked={form.landlord_noc_uploaded} onChange={(event) => update('landlord_noc_uploaded', event.target.checked)} /> Landlord NOC recorded</label>}
               <Field label="Documents required (comma separated)"><input value={form.required_documents} onChange={(event) => update('required_documents', event.target.value)} placeholder="Electricity bill, Aadhaar" /></Field>
               <Field label="Documents recorded as uploaded"><input value={form.uploaded_documents} onChange={(event) => update('uploaded_documents', event.target.value)} placeholder="Electricity bill" /></Field>
+                <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo / Pre-fill Data</button><button className="button button-primary" type="submit" disabled={!stepOneValid}>Continue to Step 2 →</button></div>
+              </form>
+            </>}
+            {activeStep === 2 && <>
+              <PanelHeading kicker="STEP 02 | SUBSIDY SELECTION" title="Compare available subsidy schemes" subtitle="Choose the program that best fits your connection and applicant category." icon="02" />
               <h3 className="journey-section-title">Compare eligible subsidy programs</h3>
               <SubsidySelector items={activeSubsidies} selectedId={selectedSubsidyId} onSelect={setSelectedSubsidyId} capacityKw={currentCapacity} consumerGroup={consumerGroup} />
-              <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(1)}>← Back</button><button className="button button-primary" type="button" disabled={!stepTwoValid} onClick={continueFromStepTwo}>Continue to Step 3 →</button></div>
+              <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(1)}>← Back</button><button className="button button-primary" type="button" onClick={continueFromStepTwo}>Continue to Step 3 →</button></div>
             </>}
             {activeStep === 3 && <>
-              <PanelHeading kicker="STEP 03 | VENDOR & FINANCE" title="Compare installers and financing" subtitle="Select a vendor and financing plan; costs follow your chosen subsidy." icon="03" />
+              <PanelHeading kicker="STEP 03 | VENDOR MARKETPLACE" title="Choose your solar installer" subtitle="Compare vendor tiers and indicative prices for your selected system and subsidy." icon="03" />
               <h3 className="journey-section-title">Choose an installer</h3><p className="journey-disclaimer">Demo marketplace profiles and pricing are illustrative. Confirm installer empanelment, scope and quote before contracting.</p>
               <VendorSelector vendors={vendors} selectedId={selectedVendorId} onSelect={(id) => { setSelectedVendorId(id); update('installer_id', id) }} capacityKw={currentCapacity} subsidy={selectedSubsidy} />
               <div className="review-details"><div><small>Applicant</small><strong>{form.applicant_name}</strong></div><div><small>State · DISCOM</small><strong>{form.state} · {form.discom_code}</strong></div><div><small>Consumer number</small><strong>{form.consumer_number}</strong></div><div><small>Usage · roof area</small><strong>{form.monthly_units} kWh/mo · {form.roof_area_sqft} sq. ft.</strong></div><div><small>Recommended system size</small><strong>{estimatedSize.toFixed(1)} kW</strong></div><div><small>Proposed capacity</small><strong>{form.proposed_capacity_kw} kW</strong></div></div>
