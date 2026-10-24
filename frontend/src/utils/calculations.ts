@@ -96,3 +96,20 @@ export function calculateSolarFinancials(inputs: SolarFinancialInputs, annualInt
     loanPaybackYears: cashPaybackYears,
   }
 }
+
+export function applySolarPriceOverrides(estimate: SolarFinancialEstimate | null, pricePerKw: number, selectedSubsidyInr: number, annualInterestRatePct: number, tenureYears: LoanTenureYears): SolarFinancialEstimate | null {
+  if (!estimate) return null
+  const grossSystemCostInr = Math.round(estimate.systemCapacityKw * Math.max(0, pricePerKw))
+  const subsidyInr = Math.max(0, selectedSubsidyInr)
+  const netPayableInr = Math.max(0, grossSystemCostInr - subsidyInr)
+  const monthlyEmiInr = calculateMonthlyEmi(netPayableInr, annualInterestRatePct, tenureYears)
+  const cashPaybackYears = estimate.annualBillSavingsInr > 0 ? Math.round(netPayableInr / estimate.annualBillSavingsInr * 10) / 10 : 0
+  const degradationFactor25Years = (1 - 0.995 ** 25) / (1 - 0.995)
+  return {
+    ...estimate, grossSystemCostInr, subsidyInr, netPayableInr,
+    loanPrincipalInr: netPayableInr, monthlyEmiInr,
+    loanNetMonthlyCashflowInr: estimate.monthlyBillSavingsInr - monthlyEmiInr,
+    cashPaybackYears, loanPaybackYears: cashPaybackYears,
+    twentyFiveYearNetSavingsInr: Math.round(estimate.annualBillSavingsInr * degradationFactor25Years - netPayableInr),
+  }
+}

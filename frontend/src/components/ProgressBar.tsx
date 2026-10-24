@@ -1,11 +1,13 @@
 import './components.css'
 
-export type WizardStep = 1 | 2 | 3
+export type WizardStep = 1 | 2 | 3 | 4 | 5
 
 const steps: { id: WizardStep; title: string; description: string }[] = [
-  { id: 1, title: 'Consumer & DISCOM', description: 'Consumer and utility details' },
-  { id: 2, title: 'Site & Consumption', description: 'Roof and electricity use' },
-  { id: 3, title: 'Subsidy & Verification', description: 'Estimate and review' },
+  { id: 1, title: 'Intake & Feasibility', description: 'Consumer, roof and usage' },
+  { id: 2, title: 'Site & Subsidy', description: 'Feasibility and scheme choice' },
+  { id: 3, title: 'Vendor & Finance', description: 'Select installer and plan' },
+  { id: 4, title: 'Portal Submission', description: 'Review and submit' },
+  { id: 5, title: 'Application Status', description: 'Track lifecycle milestones' },
 ]
 
 export default function ProgressBar({ activeStep }: { activeStep: WizardStep }) {

@@ -23,6 +23,7 @@ class WorkflowRequest(BaseModel):
     proposed_capacity_kw: float = Field(gt=0, le=1000)
     owns_rooftop: bool = True
     has_grid_connection: bool = True
+    roof_shadow_clearance_declared: bool = False
     installer_id: str = Field(min_length=1, max_length=100)
     installer_empanelled: bool
     landlord_noc_uploaded: bool = False

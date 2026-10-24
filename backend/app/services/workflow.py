@@ -129,6 +129,11 @@ def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> Workf
         record("grid_connection", "failed", "Applicant reports no grid connection.")
     else:
         record("grid_connection", "passed", "Applicant reports an existing grid connection.")
+        record("net_metering_feasibility", "passed", "Grid connection is declared; final bi-directional meter feasibility remains subject to DISCOM technical sanction.")
+    if request.roof_shadow_clearance_declared:
+        record("roof_shadow_clearance", "declared", "Applicant declares usable roof area with no material shade obstruction; a physical site survey is still required.")
+    else:
+        record("roof_shadow_clearance", "site_survey_required", "No shadow-clearance declaration was recorded; confirm during vendor site inspection.")
     if request.proposed_capacity_kw > request.sanctioned_load_kw:
         issues.append("Proposed capacity exceeds sanctioned load; reduce capacity or request load enhancement.")
         record("capacity_check", "failed", "Proposed capacity exceeds the declared sanctioned load.")
@@ -175,6 +180,7 @@ def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> Workf
         "proposed_capacity_kw": request.proposed_capacity_kw,
         "owns_rooftop": request.owns_rooftop,
         "has_grid_connection": request.has_grid_connection,
+        "roof_shadow_clearance_declared": request.roof_shadow_clearance_declared,
         "installer_id": request.installer_id,
         "installer_empanelled": request.installer_empanelled,
         "landlord_noc_uploaded": request.landlord_noc_uploaded,
@@ -199,6 +205,9 @@ def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> Workf
     )
     response = _record_event(response, "validate_input", "completed", "Application data passed structural validation.")
     response = _record_event(response, "policy_checks", status, "Ownership, grid, capacity, vendor, consent, and document checks completed.")
+    response = _record_event(response, "net_metering_feasibility", "completed" if request.has_grid_connection else "blocked", "Grid connection checked; DISCOM meter sanction remains pending.")
+    response = _record_event(response, "roof_shadow_clearance", "waiting", "Applicant declaration recorded where provided; physical shadow and structure survey remains a vendor site step.")
+    response = _record_event(response, "sanctioned_load_audit", "completed" if request.proposed_capacity_kw <= request.sanctioned_load_kw else "blocked", "Planned capacity compared with the declared sanctioned load.")
     if response.financial_summary:
         response = _record_event(response, "financial_calculation", "completed", "Deterministic subsidy and savings estimate prepared.")
     else:

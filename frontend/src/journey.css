@@ -1,0 +1,67 @@
+/* Keep the compact dashboard readable while retaining its existing layout. */
+body { font-size: 1.125rem; line-height: 1.55; }
+.page-heading p, .panel-heading p, .field>span, .field input:not([type=range]), .field select,
+.field small, .summary-label, .summary-foot, .metric-label, .metric-caption,
+.journey-disclaimer, .journey-net, .journey-perks, .vendor-specs, .tracking-search input,
+.lifecycle-step small, .agent-log p, .portal-review span, .portal-review small {
+  font-size: max(0.9rem, 1em) !important;
+  line-height: 1.5;
+}
+.panel-heading h2, .journey-section-title { font-size: 1.35rem !important; line-height: 1.25; }
+.summary-value { font-size: 2rem !important; }
+.summary-value small { font-size: 0.9rem !important; }
+.field>span, .journey-card strong, .vendor-card strong, .portal-review strong,
+.lifecycle-step strong { font-weight: 700; color: #243b2b; }
+.notice, .offline-note, .button, .wizard-step-copy strong, .wizard-step-copy small { font-size: 0.95rem; }
+.journey-section-title { margin: 24px 0 12px; color: #263a2c; }
+.journey-cards, .vendor-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.journey-card, .vendor-card { display: flex; flex-direction: column; align-items: stretch; gap: 10px; text-align: left; color: #394b3d; border: 1px solid #dce7dc; border-radius: 12px; background: #fff; padding: 16px; cursor: pointer; font: inherit; }
+.journey-card:hover, .vendor-card:hover { border-color: #63ad78; }
+.journey-card.chosen, .vendor-card.chosen { border: 2px solid #309153; background: #f4fbf5; box-shadow: 0 0 0 3px #e5f4e8; }
+.journey-card-top { display: flex; flex-direction: column; gap: 5px; }
+.journey-card-top strong { font-size: 1.08rem; }
+.journey-provider, .journey-tags i { color: #617568; font-size: 0.85rem; font-style: normal; }
+.journey-amount { color: #1e753c; font-size: 1.55rem; font-weight: 800; }
+.journey-amount small, .vendor-rating small { color: #76867a; font-size: 0.85rem; font-weight: 500; }
+.journey-net, .journey-perks, .vendor-specs { color: #56675a; }
+.journey-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+.journey-tags i { padding: 4px 8px; border-radius: 20px; background: #eef5ee; }
+.journey-disclaimer { display: block; color: #80642b; }
+.vendor-rating { color: #a56d10; font-size: 1rem; font-weight: 700; }
+.vendor-price { color: #56675a; line-height: 1.55; }
+.vendor-price strong { color: #20743d; font-size: 1.1rem; }
+.portal-review { display: grid; gap: 10px; margin: 16px 0; }
+.portal-review>div { display: flex; flex-direction: column; gap: 5px; padding: 14px; border: 1px solid #e3ebe2; border-radius: 9px; background: #fbfdfb; }
+.portal-review strong { font-size: 1.05rem; }
+.portal-review span { color: #617064; }
+.submission-checks { display: grid; gap: 10px; padding: 15px; margin: 14px 0; border-radius: 10px; background: #f7faf7; border: 1px solid #e3ebe2; }
+.submission-checks>div { display: flex; align-items: center; gap: 10px; color: #77857a; }
+.submission-checks>div>span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; background: #edf1ed; font-size: .85rem; font-weight: 800; }
+.submission-checks .complete { color: #287b43; }
+.submission-checks .complete>span { color: #287b43; background: #e3f4e7; }
+.submission-checks .checking { color: #985f14; font-weight: 700; }
+.submission-checks .checking>span { color: #a46e1d; background: #fff2d6; animation: check-pulse 1s ease-in-out infinite alternate; }
+@keyframes check-pulse { to { box-shadow: 0 0 0 5px #fff2d6; } }
+.lifecycle-panel { margin-top: 15px; }
+.tracking-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; background: #edf8ef; border: 1px solid #cee7d2; border-radius: 11px; }
+.tracking-banner div { display: flex; flex-direction: column; gap: 5px; }
+.tracking-banner small { color: #52775b; font-weight: 700; letter-spacing: .06em; }
+.tracking-banner strong { color: #176a34; font: 800 clamp(1.2rem, 3vw, 1.8rem) Manrope, sans-serif; overflow-wrap: anywhere; }
+.lifecycle-list { list-style: none; padding: 8px 0; margin: 14px 0; }
+.lifecycle-step { display: flex; gap: 12px; align-items: flex-start; min-height: 62px; position: relative; color: #7e8c80; }
+.lifecycle-step:not(:last-child)::after { content: ''; position: absolute; top: 32px; left: 15px; height: calc(100% - 20px); border-left: 2px solid #e2e9e2; }
+.lifecycle-step.completed { color: #277b42; }
+.lifecycle-marker { z-index: 1; display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #d8e2d8; border-radius: 50%; background: #fff; font-weight: 700; }
+.lifecycle-step.completed .lifecycle-marker { background: #e4f5e8; border-color: #a6d7b0; }
+.lifecycle-step>div { display: flex; flex-direction: column; gap: 4px; padding: 3px 0 12px; }
+.lifecycle-actions, .tracking-search { display: flex; flex-wrap: wrap; gap: 9px; }
+.tracking-search { margin: 18px 0; }
+.tracking-search input { flex: 1; min-width: 220px; border: 1px solid #dfe7df; border-radius: 7px; padding: 10px; }
+.agent-log { margin-top: 16px; padding: 12px; border: 1px solid #e5ece4; border-radius: 8px; }
+.agent-log summary { cursor: pointer; font-weight: 700; }
+.agent-log p small { display: block; color: #7e8b80; }
+.wizard-progress-list { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
+.wizard-step-copy strong { line-height: 1.3; }
+@media (max-width: 900px) { .journey-cards, .vendor-cards { grid-template-columns: 1fr; } }
+@media (max-width: 800px) { .wizard-step-copy small { display: none; } .wizard-step-copy strong { font-size: .75rem; } .wizard-step { gap: 5px; } }
+@media (max-width: 520px) { .tracking-banner, .lifecycle-actions { align-items: stretch; flex-direction: column; } .wizard-progress-list { gap: 5px !important; } .wizard-step-copy strong { font-size: .68rem; } }

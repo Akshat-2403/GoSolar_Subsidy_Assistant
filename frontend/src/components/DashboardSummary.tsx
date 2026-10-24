@@ -1,5 +1,5 @@
 ﻿import type { LoanTenureYears, PurchaseMode } from '../utils/calculations'
-import { calculateSolarFinancials } from '../utils/calculations'
+import { applySolarPriceOverrides, calculateSolarFinancials } from '../utils/calculations'
 import FinancialPlan from './FinancialPlan'
 import './components.css'
 
@@ -9,6 +9,8 @@ type Props = {
   sanctionedLoadKw: number | ''
   roofAreaSqft: number | ''
   proposedCapacityKw: number | ''
+  vendorPricePerKw: number
+  subsidyInr: number
   mode: PurchaseMode
   tenureYears: LoanTenureYears
   interestRatePct: number
@@ -21,13 +23,14 @@ function money(value: number) {
   return `₹${Math.round(value).toLocaleString('en-IN')}`
 }
 
-export default function DashboardSummary({ monthlyUnits, tariffInrPerKwh, sanctionedLoadKw, roofAreaSqft, proposedCapacityKw, mode, tenureYears, interestRatePct, onModeChange, onTenureChange, onInterestRateChange }: Props) {
+export default function DashboardSummary({ monthlyUnits, tariffInrPerKwh, sanctionedLoadKw, roofAreaSqft, proposedCapacityKw, vendorPricePerKw, subsidyInr, mode, tenureYears, interestRatePct, onModeChange, onTenureChange, onInterestRateChange }: Props) {
   const ready = Number(monthlyUnits) > 0 && Number(sanctionedLoadKw) > 0 && Number(tariffInrPerKwh) > 0
-  const estimate = ready ? calculateSolarFinancials({
+  const baseEstimate = ready ? calculateSolarFinancials({
     monthlyUnits: Number(monthlyUnits), sanctionedLoadKw: Number(sanctionedLoadKw),
     roofAreaSqft: Number(roofAreaSqft), proposedCapacityKw: Number(proposedCapacityKw),
     tariffInrPerKwh: Number(tariffInrPerKwh),
   }, interestRatePct, tenureYears) : null
+  const estimate = applySolarPriceOverrides(baseEstimate, vendorPricePerKw, subsidyInr, interestRatePct, tenureYears)
   const metrics = [
     { label: 'Recommended system size', value: estimate ? `${estimate.systemCapacityKw.toFixed(1)} kW` : '-- kW' },
     { label: 'Estimated subsidy', value: estimate ? money(estimate.subsidyInr) : '₹ --' },
