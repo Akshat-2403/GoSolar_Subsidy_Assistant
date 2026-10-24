@@ -10,7 +10,7 @@ export type MockPortalConsumer = {
   discom: string
 }
 
-type Props = { open: boolean; consumer: MockPortalConsumer; onClose: () => void }
+type Props = { open: boolean; consumer: MockPortalConsumer; auditPassed?: boolean; onClose: () => void }
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ?? character)
@@ -25,7 +25,7 @@ function printSanctionLetter(consumer: MockPortalConsumer) {
   return true
 }
 
-export default function MockDiscomPortalModal({ open, consumer, onClose }: Props) {
+export default function MockDiscomPortalModal({ open, consumer, auditPassed = false, onClose }: Props) {
   const [approved, setApproved] = useState(false)
   const [notice, setNotice] = useState('')
 
@@ -45,10 +45,10 @@ export default function MockDiscomPortalModal({ open, consumer, onClose }: Props
   return <div className="mock-portal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section className="mock-portal-modal" role="dialog" aria-modal="true" aria-labelledby="mock-portal-title">
       <header className="mock-portal-header"><div className="portal-emblem" aria-hidden="true"><span>GOVT.</span><strong>INDIA</strong></div><div className="portal-header-copy"><small>GOVERNMENT OF INDIA · MNRE</small><h2 id="mock-portal-title">State DISCOM Rooftop Solar Portal</h2><p>National Portal for PM Surya Ghar: Muft Bijli Yojana</p></div><button className="mock-portal-close" type="button" aria-label="Close portal" onClick={onClose}>×</button></header>
-      <div className={`portal-account-banner ${approved ? 'portal-approved' : ''}`}><span className="portal-account-icon">{approved ? '✓' : '●'}</span><div><strong>{approved ? 'SIMULATED TECHNICAL SANCTION APPROVED' : 'CONSUMER ACCOUNT · VERIFIED'}</strong><small>{approved ? 'This is a demonstration decision only.' : 'Connection details are shown for this local preview.'}</small></div><span className="portal-demo-label">DEMO</span></div>
+      <div className={`portal-account-banner ${approved ? 'portal-approved' : ''}`}><span className="portal-account-icon">{approved ? '✓' : '●'}</span><div><strong>{approved ? 'SIMULATED TECHNICAL SANCTION APPROVED' : auditPassed ? 'CONSUMER ACCOUNT · AUDIT COMPLETE' : 'CONSUMER ACCOUNT · AWAITING VERIFICATION'}</strong><small>{approved ? 'This is a demonstration decision only.' : auditPassed ? 'Policy and document audit completed for this demo.' : 'Run the policy and feasibility audit in Step 4 to validate this application.'}</small></div><span className="portal-demo-label">DEMO</span></div>
       <div className="mock-portal-body">
         <section className="portal-consumer-card"><div className="portal-section-title"><span>01</span>Consumer & application details</div><dl><div><dt>Applicant name</dt><dd>{consumer.applicantName || 'Not entered'}</dd></div><div><dt>Consumer account number</dt><dd>{consumer.consumerNumber || 'Not entered'}</dd></div><div><dt>Sanctioned load</dt><dd>{consumer.sanctionedLoadKw || '—'} kW</dd></div><div><dt>Applied solar capacity</dt><dd>{consumer.appliedCapacityKw || '—'} kW</dd></div><div><dt>State & DISCOM</dt><dd>{[consumer.state, consumer.discom].filter(Boolean).join(' · ') || 'Not selected'}</dd></div></dl></section>
-        <section className="portal-checks"><div className="portal-section-title"><span>02</span>Feasibility & metering checklist</div><ul><li><span>✓</span><div><strong>Distribution transformer (DT) loading</strong><small>Within the 80% threshold (simulated check)</small></div><b>PASS</b></li><li><span>✓</span><div><strong>Bi-directional net-meter feasibility</strong><small>Net-metering arrangement is sanctioned (simulated)</small></div><b>PASS</b></li><li><span>✓</span><div><strong>Document verification</strong><small>Electricity bill and identity details matched (simulated)</small></div><b>PASS</b></li></ul></section>
+        <section className="portal-checks"><div className="portal-section-title"><span>02</span>Feasibility & metering checklist</div><ul>{['Distribution transformer (DT) loading', 'Bi-directional net-meter feasibility', 'Document verification'].map((item) => <li key={item}><span>{auditPassed ? '✓' : '○'}</span><div><strong>{item}</strong><small>{auditPassed ? 'Checked in the GoSolar demo audit.' : 'Awaiting the Step 4 policy and document audit.'}</small></div><b>{auditPassed ? 'CHECKED' : 'PENDING'}</b></li>)}</ul></section>
         <div className="portal-simulation-note"><strong>Simulation only</strong><span>This portal is an in-app preview. No DISCOM, government service, or subsidy application is contacted.</span></div>
         {notice && <p className="portal-print-notice" role="alert">{notice}</p>}
         <footer className="mock-portal-actions"><button className="button button-quiet" type="button" onClick={onClose}>Close portal</button><button className="button button-outline" type="button" onClick={generateLetter}>Generate Sanction Letter (PDF/Print)</button><button className="button button-primary" type="button" disabled={approved} onClick={() => setApproved(true)}>{approved ? 'Approval simulated' : 'Simulate Approval'}</button></footer>

@@ -4,6 +4,7 @@ import BillUpload from './components/BillUpload'
 import FinancialPlan from './components/FinancialPlan'
 import MockDiscomPortalModal, { type MockPortalConsumer } from './components/MockDiscomPortalModal'
 import ProgressBar, { type WizardStep } from './components/ProgressBar'
+import DocumentUploads, { type UploadedDocuments } from './components/DocumentUploads'
 import RoofVisualizer from './components/RoofVisualizer'
 import SubsidyGuideModal from './components/SubsidyGuideModal'
 import SubsidySelector from './components/SubsidySelector'
@@ -44,6 +45,7 @@ type DraftState = {
   consumerGroup: 'residential' | 'agricultural' | 'rwa'; selectedSubsidyId: string; selectedVendorId: string
   trackingRecord: TrackingRecord | null; trackingSearch: string; consumerVerified: boolean; submittedNotice: boolean
   purchaseMode: PurchaseMode; loanTenureYears: LoanTenureYears; interestRatePct: number
+  uploadedDocuments?: UploadedDocuments
 }
 
 function readDraft(): DraftState | null {
@@ -151,6 +153,9 @@ function App() {
   const [consumerVerification, setConsumerVerification] = useState<'idle' | 'checking' | 'verified'>(draft?.consumerVerified ? 'verified' : 'idle')
   const [submittedNotice, setSubmittedNotice] = useState(draft?.submittedNotice ?? false)
   const [draftCleared, setDraftCleared] = useState(false)
+  const [uploadedDocuments, setUploadedDocuments] = useState<UploadedDocuments>(draft?.uploadedDocuments ?? { bill: null, ownership: null, governmentId: null })
+  const [estimateOpen, setEstimateOpen] = useState(false)
+  const [auditState, setAuditState] = useState<'pending' | 'running' | 'passed' | 'failed'>('pending')
   const activeWorkflowId = workflow?.workflow_id
   const stateNames = Object.keys(discoms).sort()
   const discomOptions = form.state ? discoms[form.state as keyof typeof discoms] ?? [] : []
@@ -172,11 +177,11 @@ function App() {
     }
     const timer = window.setTimeout(() => {
       try {
-        localStorage.setItem('gosolar_draft_application', JSON.stringify({ form, workflow, events, activeStep, offlinePreview, consumerGroup, selectedSubsidyId, selectedVendorId, trackingRecord, trackingSearch, consumerVerified: consumerVerification === 'verified', submittedNotice, purchaseMode, loanTenureYears, interestRatePct } satisfies DraftState))
+        localStorage.setItem('gosolar_draft_application', JSON.stringify({ form, workflow, events, activeStep, offlinePreview, consumerGroup, selectedSubsidyId, selectedVendorId, trackingRecord, trackingSearch, consumerVerified: consumerVerification === 'verified', submittedNotice, purchaseMode, loanTenureYears, interestRatePct, uploadedDocuments } satisfies DraftState))
       } catch { /* Draft recovery is optional when browser storage is unavailable. */ }
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [form, workflow, events, activeStep, offlinePreview, consumerGroup, selectedSubsidyId, selectedVendorId, trackingRecord, trackingSearch, consumerVerification, submittedNotice, purchaseMode, loanTenureYears, interestRatePct, draftCleared])
+  }, [form, workflow, events, activeStep, offlinePreview, consumerGroup, selectedSubsidyId, selectedVendorId, trackingRecord, trackingSearch, consumerVerification, submittedNotice, purchaseMode, loanTenureYears, interestRatePct, uploadedDocuments, draftCleared])
 
   useEffect(() => {
     if (consumerVerification !== 'checking') return
@@ -220,6 +225,7 @@ function App() {
 
   function update<K extends keyof Intake>(key: K, value: Intake[K]) {
     setDraftCleared(false)
+    setAuditState('pending')
     setForm((current) => ({ ...current, [key]: value }))
     if (key === 'state') setForm((current) => ({ ...current, state: value as string, discom_code: '' }))
     if (['consumer_number', 'state', 'discom_code', 'sanctioned_load_kw'].includes(key)) setConsumerVerification('idle')
@@ -441,12 +447,19 @@ function App() {
   }
   function useDemo() {
     setDraftCleared(false); setConsumerVerification('verified'); setSubmittedNotice(false); setTrackingRecord(null); setTrackingSearch(''); setForm(demo); setWorkflow(null); setEvents([]); setError(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
-    setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1)
+    setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setUploadedDocuments({ bill: { name: 'demo-electricity-bill.pdf', size: 184320 }, ownership: null, governmentId: null }); setAuditState('pending')
   }
   function startNew() {
-    setDraftCleared(true); setConsumerVerification('idle'); setSubmittedNotice(false); setTrackingSearch(''); setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setTrackingSearch(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco'); setPurchaseMode('cash'); setLoanTenureYears(5); setInterestRatePct(7)
+    setDraftCleared(true); setConsumerVerification('idle'); setSubmittedNotice(false); setTrackingSearch(''); setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setTrackingSearch(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco'); setPurchaseMode('cash'); setLoanTenureYears(5); setInterestRatePct(7); setUploadedDocuments({ bill: null, ownership: null, governmentId: null }); setAuditState('pending')
   }
   function continueFromStepOne() { if (stepOneValid) { setError(''); setActiveStep(2) } else setError('Please resolve the highlighted Step 1 fields before continuing.') }
+  async function runPolicyAudit() {
+    if (auditState === 'running') return
+    if (!stepOneValid || !uploadedDocuments.bill) { setError('Complete the Step 1 declarations and upload the required Electricity Bill before running the audit.'); setAuditState('failed'); return }
+    setAuditState('running'); setError('')
+    for (let index = 0; index < 3; index += 1) { setSubmissionCheckStep(index); await new Promise((resolve) => window.setTimeout(resolve, 650)) }
+    setAuditState('passed')
+  }
   function continueFromStepTwo() { setError(''); setActiveStep(3) }
   async function lookupTracking() {
     const key = trackingSearch.trim().toUpperCase()
@@ -490,15 +503,14 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">☼</div><div><strong>GoSolar<span>.</span></strong><small>SUBSIDY ASSISTANT</small></div></div>
       <div className="workspace-label">YOUR APPLICATION</div>
-      <nav className="nav-list"><button className={`nav-item ${currentView === 'assessment' ? 'selected' : ''}`} onClick={() => setCurrentView('assessment')}><span className="nav-icon">A</span>New assessment</button><button className={`nav-item ${currentView === 'tracking' ? 'selected' : ''}`} onClick={() => setCurrentView('tracking')}><span className="nav-icon">T</span>Track application</button><button className="nav-item" onClick={() => { startNew(); setCurrentView('assessment') }}><span className="nav-icon">R</span>Start over</button></nav>
+      {currentView === 'assessment' ? <ProgressBar activeStep={activeStep} /> : <div className="sidebar-track-label">Application tracking</div>}
       <div className="sidebar-bottom"><div className="system-card"><span className="status-dot" /><div><strong>Demo services</strong><small>Agent API · mock portal</small></div></div><div className="profile"><div className="avatar">GS</div><div><strong>GoSolar workspace</strong><small>Human approval enabled</small></div></div></div>
     </aside>
     <div className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><button className="button button-quiet" type="button" onClick={openMockPortal}>Open mock portal</button></div></header>
+      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={() => { startNew(); setCurrentView('assessment') }}>Start Over</button><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><button className="button button-quiet" type="button" onClick={openMockPortal}>Open mock portal</button><button className="button button-outline estimate-trigger" type="button" aria-expanded={estimateOpen} onClick={() => setEstimateOpen((open) => !open)}>📊 {estimateOpen ? 'Hide' : 'View'} Live Estimate</button></div></header>
       <main className="page-content">
         {currentView === 'assessment' ? <>
         <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ROOFTOP SOLAR · PERSONALIZED ESTIMATE</div><h1>Plan your <span>solar journey</span></h1><p>Share a few details to explore your rooftop potential and available subsidy estimate.</p></div><button className="button button-outline" type="button" onClick={() => setGuide(true)}>Learn about subsidies</button></div>
-        <ProgressBar activeStep={activeStep} />
         {error && <div className="notice notice-warning" role="alert"><span className="notice-symbol">!</span><span>{error}</span>{offlineAvailable && <button type="button" className="button button-quiet offline-action" onClick={() => { setOfflinePreview(true); setOfflineAvailable(false); setError('') }}>Continue in offline preview</button>}<button type="button" aria-label="Dismiss message" onClick={() => setError('')}>×</button></div>}
         {offlinePreview && <div className="offline-note" role="status">Offline preview is active. Estimates are local approximations; no policy checks or portal submissions will be made.</div>}
         {workflow?.issues.map((issue) => <div className="notice notice-warning" key={issue}><span className="notice-symbol">!</span>{issue}</div>)}
@@ -508,6 +520,7 @@ function App() {
             {activeStep === 1 && <>
               <PanelHeading kicker="STEP 01 - CONSUMER & FEASIBILITY" title="Your electricity connection and rooftop" subtitle="Enter your bill details, electricity use and roof information to check feasibility." icon="01" />
               <BillUpload key={billUploadKey} endpoint={BILL_OCR_URL} onExtracted={applyBillExtraction} />
+              <DocumentUploads value={uploadedDocuments} onChange={(documents) => { setUploadedDocuments(documents); setDraftCleared(false); setAuditState('pending') }} />
               <form onSubmit={(event) => { event.preventDefault(); continueFromStepOne() }} noValidate>
                 <Field label="Applicant name"><input autoComplete="name" value={form.applicant_name} onChange={(event) => update('applicant_name', event.target.value)} placeholder="e.g. Asha Sharma" aria-invalid={!!validation.name} />{form.applicant_name && validation.name && <small className="field-error">{validation.name}</small>}</Field>
                 <div className="form-grid">
@@ -539,9 +552,7 @@ function App() {
               <label className="check-line"><input type="checkbox" checked={form.has_grid_connection} onChange={(event) => update('has_grid_connection', event.target.checked)} /> Active grid connection</label>
               <label className="check-line"><input type="checkbox" checked={form.roof_shadow_clearance_declared} onChange={(event) => update('roof_shadow_clearance_declared', event.target.checked)} /> I declare that the usable roof has no significant shade obstruction (site survey still required)</label>
               {form.applicant_type === 'tenant' && <label className="check-line"><input type="checkbox" checked={form.landlord_noc_uploaded} onChange={(event) => update('landlord_noc_uploaded', event.target.checked)} /> Landlord NOC recorded</label>}
-              <Field label="Documents required (comma separated)"><input value={form.required_documents} onChange={(event) => update('required_documents', event.target.value)} placeholder="Electricity bill, Aadhaar" /></Field>
-              <Field label="Documents recorded as uploaded"><input value={form.uploaded_documents} onChange={(event) => update('uploaded_documents', event.target.value)} placeholder="Electricity bill" /></Field>
-                <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo / Pre-fill Data</button><button className="button button-primary" type="submit" disabled={!stepOneValid}>Proceed to Subsidy Selection →</button></div>
+                <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo / Pre-fill Data</button><button className="button button-primary" type="submit" disabled={!stepOneValid || !uploadedDocuments.bill}>Proceed to Subsidy Selection →</button></div>
               </form>
             </>}
             {activeStep === 2 && <>
@@ -579,11 +590,13 @@ function App() {
 
             {activeStep === 4 && <>
               <PanelHeading kicker="STEP 04 | PORTAL SUBMISSION" title="Review the application payload" subtitle="The agent performs demo checks before dispatch to the mock portal." icon="04" />
-              <div className="portal-review"><div><small>Applicant and connection</small><strong>{form.applicant_name} | {form.consumer_number}</strong><span>{form.state} | {form.discom_code}</span></div><div><small>System and selected program</small><strong>{form.proposed_capacity_kw} kW | {selectedSubsidy?.name}</strong><span>{vendors.find((item) => item.id === selectedVendorId)?.name}</span></div><div><small>Agent validation</small><strong>Net metering | Roof clearance | Sanctioned load</strong><span>LangGraph policy and feasibility simulation runs at submission.</span></div></div>
+              <div className="portal-review"><div><small>Applicant and connection</small><strong>{form.applicant_name} | {form.consumer_number}</strong><span>{form.state} | {form.discom_code}</span></div><div><small>System and selected program</small><strong>{form.proposed_capacity_kw} kW | {selectedSubsidy?.name}</strong><span>{vendors.find((item) => item.id === selectedVendorId)?.name}</span></div><div><small>Policy & feasibility audit</small><strong>{auditState === 'passed' ? 'Audit complete' : auditState === 'running' ? 'Audit in progress' : 'Pending input'}</strong><span>{auditState === 'passed' ? 'Required fields and electricity bill checked for this demo.' : 'Run the audit to validate entered inputs and uploaded documents.'}</span></div></div>
+              <div className="audit-checklist" role="status" aria-live="polite">{['Consumer and site inputs', 'Required electricity bill', 'Policy declarations'].map((item, index) => <div key={item} className={auditState === 'passed' ? 'audit-passed' : auditState === 'running' && index === submissionCheckStep ? 'audit-running' : ''}><span>{auditState === 'passed' || auditState === 'running' && index < submissionCheckStep ? '✓' : '○'}</span>{item}<strong>{auditState === 'passed' ? 'Verified' : auditState === 'running' && index <= submissionCheckStep ? 'Checking' : 'Awaiting verification'}</strong></div>)}</div>
+              <button type="button" className="button button-outline" disabled={auditState === 'running'} onClick={() => { setSubmissionCheckStep(0); void runPolicyAudit() }}>{auditState === 'running' ? 'Running audit…' : auditState === 'passed' ? 'Run Policy & Feasibility Audit Again' : 'Run Policy & Feasibility Audit'}</button>
               {busy && <div className="submission-checks" role="status" aria-live="polite">{submissionChecks.map((check, index) => <div className={index < submissionCheckStep ? 'complete' : index === submissionCheckStep ? 'checking' : ''} key={check}><span>{index < submissionCheckStep ? '✓' : index === submissionCheckStep ? '…' : index + 1}</span>{check}</div>)}</div>}
               <div className="workflow-list">{workflow?.events.map((event, index) => <div className="workflow-node done" key={`${event.node}-${index}`}><div className="node-rail"><div className="node-circle">✓</div></div><div className="node-content"><strong>{event.node.replaceAll('_', ' ')}</strong><span>{event.message}</span></div><span className="node-state">{event.status}</span></div>)}</div>
               <p className="journey-disclaimer">Demo only: no government portal is contacted. Submission is recorded in GoSolar's mock application store.</p>
-              <div className="step-three-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(3)}>Back to vendor and finance</button><button className="button button-primary" type="button" disabled={busy || (!workflow?.can_proceed && !offlinePreview)} onClick={approve}>{busy ? <><span className="inline-spinner" />Validating with National Portal API &amp; LangGraph Policy Engine...</> : 'Submit to National Portal'}</button></div>
+              <div className="step-three-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(3)}>Back to vendor and finance</button><button className="button button-primary" type="button" disabled={busy || auditState !== 'passed' || (!workflow?.can_proceed && !offlinePreview)} onClick={approve}>{busy ? <><span className="inline-spinner" />Validating with National Portal API &amp; LangGraph Policy Engine...</> : 'Submit to National Portal'}</button></div>
             </>}
             {activeStep === 5 && trackingRecord && <>
               <PanelHeading kicker="STEP 05 | APPLICATION STATUS" title="Your solar application journey" subtitle="Follow the demo milestones and keep the tracking ID for future lookup." icon="05" />
@@ -593,7 +606,7 @@ function App() {
             </>}
             <p className="draft-saved" role="status">Draft auto-saved on this device</p>
           </section>
-          <div className="wizard-aside"><DashboardSummary monthlyUnits={form.monthly_units} tariffInrPerKwh={form.tariff_inr_per_kwh} sanctionedLoadKw={form.sanctioned_load_kw} roofAreaSqft={form.roof_area_sqft} proposedCapacityKw={form.proposed_capacity_kw} vendorPricePerKw={vendors.find((item) => item.id === selectedVendorId)?.price_per_kw ?? 60000} subsidyInr={selectedSubsidy?.estimated_subsidy_inr ?? 0} mode={purchaseMode} tenureYears={loanTenureYears} interestRatePct={interestRatePct} onModeChange={setPurchaseMode} onTenureChange={setLoanTenureYears} onInterestRateChange={setInterestRatePct} /><section className="panel guide-prompt"><PanelHeading kicker="KNOW BEFORE YOU GO" title="How subsidies work" subtitle="Understand central assistance, metering and required documents." icon="i" /><button className="button button-outline full-button" type="button" onClick={() => setGuide(true)}>Open the solar guide</button></section>
+          <div className={`wizard-aside ${estimateOpen ? 'estimate-open' : ''}`}><DashboardSummary monthlyUnits={form.monthly_units} tariffInrPerKwh={form.tariff_inr_per_kwh} sanctionedLoadKw={form.sanctioned_load_kw} roofAreaSqft={form.roof_area_sqft} proposedCapacityKw={form.proposed_capacity_kw} vendorPricePerKw={vendors.find((item) => item.id === selectedVendorId)?.price_per_kw ?? 60000} subsidyInr={selectedSubsidy?.estimated_subsidy_inr ?? 0} mode={purchaseMode} tenureYears={loanTenureYears} interestRatePct={interestRatePct} onModeChange={setPurchaseMode} onTenureChange={setLoanTenureYears} onInterestRateChange={setInterestRatePct} /><section className="panel guide-prompt"><PanelHeading kicker="KNOW BEFORE YOU GO" title="How subsidies work" subtitle="Understand central assistance, metering and required documents." icon="i" /><button className="button button-outline full-button" type="button" onClick={() => setGuide(true)}>Open the solar guide</button></section>
           </div>
         </div>
         <footer className="page-footer"><span>GoSolar · Demonstration only</span><span>Not a government service or eligibility determination</span></footer>
@@ -601,7 +614,7 @@ function App() {
       </main>
     </div>
     <SubsidyGuideModal open={guide} onClose={() => setGuide(false)} />
-    {portalOpen && <MockDiscomPortalModal open={portalOpen} consumer={portalConsumer} onClose={() => setPortalOpen(false)} />}
+    {portalOpen && <MockDiscomPortalModal open={portalOpen} consumer={portalConsumer} auditPassed={auditState === 'passed'} onClose={() => setPortalOpen(false)} />}
   </div>
 }
 
