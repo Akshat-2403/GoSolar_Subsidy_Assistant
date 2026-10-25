@@ -1,107 +1,133 @@
-# Rooftop Solar Subsidy Assistant
+﻿# GoSolar · Rooftop Solar Subsidy Assistant
 
-A demonstration system for evaluating rooftop solar application data, showing deterministic checks and evidence, pausing for human approval, and filing to a separate simulated DISCOM portal.
+[![CI](https://github.com/Akshat-2403/Rooftop-Solar-Subsidy-Agent/actions/workflows/ci.yml/badge.svg?branch=feature%2Fgosolar-overhaul-v2)](https://github.com/Akshat-2403/Rooftop-Solar-Subsidy-Agent/actions/workflows/ci.yml)
+![Live demo: add deployment URL](https://img.shields.io/badge/live%20demo-add%20deployment%20URL-lightgrey)
 
-This is a demo, not a government service. It does not verify real DISCOM/vendor records, document authenticity, current statutory rules, subsidy entitlement, or government approval.
+GoSolar helps a homeowner understand rooftop-solar subsidy steps and prepare an application for a **mock subsidy portal**. It collects inputs, checks scheme and vendor conditions, retrieves policy evidence, pauses for human review, and records a simulated receipt. It does not file with a government service or guarantee subsidy eligibility or payment.
 
-## Components
+## Hackathon problem fit
 
-- frontend/: React + Vite Mission Control UI.
-- backend/: FastAPI API and LangGraph workflow.
-- backend/app/portal/mock_portal.py: independently runnable simulated portal and REST API.
+The assigned Ziro Agentic AI Hackathon brief is **Rooftop Solar Subsidy Assistant** (Social Impact & Sustainability · AI). The participant dashboard asks for a homeowner workflow that collects consumer number, ownership and planned capacity; applies official scheme and vendor conditions; finds scheme and electricity-board information; fills an application after human approval; returns steps, application ID and pending items; and independently verifies the result.
 
-The LangGraph workflow validates the request, calculates an indicative estimate, retrieves source passages from MNRE and MSEDCL policy material through a lightweight in-memory cosine index using LangChain documents and embeddings, pauses at a checkpointed human review interrupt, and resumes to submit the approved payload. The evidence index always uses local token vectors and makes no embedding API calls. Set GEMINI_API_KEY to enable the optional Gemini free-tier assessment (GEMINI_MODEL defaults to gemini-3.5-flash-lite); leave it blank for fully offline operation. The checkpointer and workflow store are in memory for the single-process demo; workflow state is lost on restart.
+GoSolar addresses these requirements with a React assessment flow, a LangGraph evaluation and human-approval workflow, source-linked policy evidence, deterministic eligibility guards, and a separate local mock DISCOM portal. A non-production, offline benchmark tray runs the four dashboard test cases. See [HACKATHON_SPEC.md](HACKATHON_SPEC.md) for the captured source requirements and [SUBMISSION.md](SUBMISSION.md) for the judge walkthrough.
 
-The portal driver uses REST when MOCK_PORTAL_URL is configured, retries transient service failures up to three times, and leaves failed approved submissions in a retryable queue. Without that variable, the backend uses the same portal validation locally for single-process development.
+## Official dashboard benchmark cases
 
-## Local setup
+| Case | Dashboard scenario | Expected verdict | GoSolar behavior |
+| --- | --- | --- | --- |
+| TC1 | Eligible home | Draft application | Completes checks and pauses at human review. |
+| TC2 | Vendor not empanelled | Flagged | Blocks the case with a vendor warning. |
+| TC3 | Tenant, not owner | Consent needed | Blocks pending landlord consent / NOC. |
+| TC4 | Application ID | Subsidy not promised | Treats a mock receipt as submission evidence only, never as subsidy approval. |
 
-### Backend API
+Use **Official benchmark scenarios** in the header to prefill synthetic inputs and evaluate a case. TC1–TC3 call the backend when available and fall back to local deterministic demo rules when it is not. TC4 is a read-only receipt interpretation check. No benchmark case submits a live government application.
 
-From backend/:
+## Architecture
+
+```mermaid
+flowchart LR
+  U[Homeowner / Judge] --> UI[React Mission Control]
+  UI -->|synthetic or user-provided intake| G[LangGraph workflow]
+  G --> V[Input and eligibility guardrails]
+  G --> R[Local policy retrieval]
+  R --> P[MNRE and DISCOM source passages]
+  G --> C[Deterministic subsidy and financial tools]
+  V --> E[Evidence log and workflow events]
+  R --> E
+  C --> E
+  E --> UI
+  UI -->|explicit human approval| M[Mock DISCOM portal]
+  M -->|simulated receipt ID| UI
+  UI --> B[Independent application lookup / tracking]
+```
+
+This implementation uses a stateful workflow graph with deterministic policy checks and retrieval. It is not represented as multiple autonomous agents: the hackathon rubric has an Agentic Capability category, but does not require a multi-agent architecture.
+
+## Evaluation evidence mapped to the published rubric
+
+The dashboard allocates points to categories, not to individual features. The table maps the implementation evidence to those categories; it is not a score guarantee.
+
+| Rubric category | Points | Evidence in GoSolar |
+| --- | ---: | --- |
+| Problem fit & usefulness | 20 | Homeowner intake, scheme/vendor checks, application steps, pending items and mock filing flow. |
+| Agentic capability | 25 | LangGraph stages, deterministic rules, retrieval, approval interrupt, event trail and separate portal action. |
+| Technical implementation | 20 | Typed React UI, FastAPI/Pydantic validation, source records, retries and local mock portal. |
+| Innovation | 15 | Offline-first policy retrieval, synthetic benchmark tray and traceable rule evidence. |
+| User experience | 10 | Guided steps, explicit blocked/pending states, application tracking and decision inspector. |
+| Presentation | 10 | This README, [SUBMISSION.md](SUBMISSION.md), demo script, architecture and benchmark evidence. |
+
+## Run locally
+
+Requirements: Node.js/npm, Python 3.12+, uv. No API key is required for the deterministic workflow or policy retrieval. Optional third-party assessment is disabled unless `GEMINI_API_KEY` is configured.
+
+### Backend and mock portal
+
+From `backend/`, install dependencies once:
 
 ~~~powershell
 uv sync --group dev
-$env:CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
-$env:MOCK_PORTAL_URL = "http://127.0.0.1:8001"
-uv run uvicorn app.main:app --reload --port 8000
 ~~~
 
-### Mock portal
-
-In another terminal, from backend/:
+In one terminal, run the API with `PORT` set to the desired backend port and `CORS_ORIGINS` set only when serving the frontend from another origin. In a second terminal, run the standalone mock portal with `PORT` set to its port and `MOCK_PORTAL_FAIL_STATUS` optionally set to `503` to demonstrate retry handling.
 
 ~~~powershell
-uv run uvicorn app.portal.mock_portal:app --reload --port 8001
+$env:PORT = '<backend-port>'
+$env:CORS_ORIGINS = '<frontend-origin>'
+$env:MOCK_PORTAL_URL = 'http://127.0.0.1:<mock-portal-port>'
+uv run uvicorn app.main:app --reload --port $env:PORT
 ~~~
 
-Portal UI: http://127.0.0.1:8001  
-Portal API: http://127.0.0.1:8001/api/applications
+~~~powershell
+$env:PORT = '<mock-portal-port>'
+uv run uvicorn app.portal.mock_portal:app --reload --port $env:PORT
+~~~
 
-### Mission Control UI
+Set `VITE_BACKEND_URL` in the frontend environment to the API origin for local Vite proxying. Set the Vite frontend port when launching the dev server. When using same-origin routes in a deployed environment, leave `VITE_API_BASE_URL` blank.
 
-From frontend/:
+### Frontend
+
+From `frontend/`:
 
 ~~~powershell
 npm ci
-Copy-Item .env.example .env.local
-npm run dev
+$env:VITE_BACKEND_URL = 'http://127.0.0.1:<backend-port>'
+$env:FRONTEND_PORT = '<frontend-port>'
+npm run dev -- --port $env:FRONTEND_PORT
 ~~~
 
-The frontend uses VITE_API_BASE_URL and VITE_PORTAL_URL from .env.local. VITE_API_URL remains supported for existing configurations. The browser-facing portal defaults to the same-origin `/api/mock-discom/portal` route; `MOCK_PORTAL_URL` is a server-side setting for the backend-to-portal connection.
+The electricity-bill upload is optional and uses sample extraction when no OCR service is configured. Use synthetic information for the demo.
 
-## Tests and build checks
+### Docker Compose
 
-From backend/:
-
-~~~powershell
-uv run --group dev pytest -v
-~~~
-
-From frontend/:
-
-~~~powershell
-npm run build
-npm run lint
-~~~
-
-## Docker
-
-From the repository root:
+The Compose file reads configurable host/container port variables. Copy `.env.example` to `.env` and adjust those values if the defaults conflict with local services.
 
 ~~~powershell
 docker compose up --build
 ~~~
 
-The compose file runs the API on port 8000 and the standalone mock portal on port 8001. Run the Vite app locally or deploy it separately.
+## Verification
 
-## Cloud demo deployment
+From `frontend/`:
 
-1. Deploy backend/ as a Render Docker web service using backend/Dockerfile. Optionally set GEMINI_API_KEY for Gemini free-tier policy assessment. No embedding key is needed. Set CORS_ORIGINS to any custom frontend origin. Vercel preview origins ending in .vercel.app are allowed by the API.
-2. Deploy a second Render Docker service from the same backend/Dockerfile, with the start command: uvicorn app.portal.mock_portal:app --host 0.0.0.0 --port $PORT.
-3. Set MOCK_PORTAL_URL on the API service to the portal service's HTTPS origin.
-4. Deploy frontend/ to Vercel with build command npm run build, output directory dist, and environment values VITE_API_BASE_URL=https://your-agent-api.onrender.com and VITE_PORTAL_URL=https://your-mock-portal.onrender.com.
-5. Add the final Vercel origin to the API service's CORS_ORIGINS, then redeploy the API.
+~~~powershell
+npm run build:check
+npm run lint
+~~~
 
-VITE_* values are included in the browser bundle; put no secrets in them. The demo stores state in process memory, so configure one API instance and expect workflows to clear on restart. Before multi-instance or production use, replace the in-memory workflow store/checkpointer with a durable database-backed implementation and verify all rules against authoritative, current utility and scheme sources.
+From the repository root, after installing backend development dependencies:
 
-## API
+~~~powershell
+uv run --project backend --group dev python scripts/run_benchmarks.py
+uv run --project backend --group dev pytest -v backend/tests
+~~~
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| POST | /api/applications/validate | Basic application validation |
-| POST | /api/workflows/evaluate | Start graph and return its current state |
-| GET | /api/workflows/{workflow_id} | Read workflow status |
-| GET | /api/workflows/{workflow_id}/events | Replay workflow events as SSE |
-| POST | /api/workflows/{workflow_id}/approve | Resume LangGraph after explicit approval |
-| POST | /api/workflows/{workflow_id}/submit | Backward-compatible approval route |
-| GET | /health | Health check
-| GET | /api/health | Health check alias |
+The benchmark exits nonzero if any official case misses its expected verdict. It uses the in-process mock portal for TC4 and ignores any configured external `MOCK_PORTAL_URL` during that local receipt check.
 
-## Demonstration behavior and limits
+## Safety, accuracy, and deployment limits
 
-- The subsidy formula and generation/payback assumptions are deterministic examples from the supplied blueprint. They are not dynamically verified against government circulars.
-- Empanelment and document upload status are applicant-supplied declarations. The portal validates fields but does not query a DISCOM registry or authenticate documents.
-- MOCK_PORTAL_FAIL_STATUS=503 makes the portal return a maintenance error for retry-path demonstrations.
-- The standalone portal generates synthetic APP-SOL-2026-XXXXX IDs only.
-- OCR, Supabase persistence, CAPTCHA solving, and real government submission are not implemented. RAG cites official published source passages; verify their currentness and applicability before making eligibility or filing decisions.
+- Portal actions remain behind an explicit human review step. An application ID is a mock receipt, not a subsidy approval or payment confirmation.
+- A declared roof planning limit uses 100 sq. ft. per kW; a proposal above declared sanctioned load raises a load-enhancement warning. Missing transformer/feeder data stays pending DISCOM technical sanction; GoSolar does not invent a feeder-capacity check.
+- Vendor status and document uploads are declarations in the demo and are not independently authenticated against live registries.
+- Policy passages are a local curated snapshot with source links. Verify current scheme and DISCOM terms before relying on the information.
+- The workflow state and LangGraph checkpointer are process-local. Use a durable database and shared checkpoint store before multi-instance production deployment.
+- The mock portal creates synthetic IDs only. Never send real customer data to this demo.

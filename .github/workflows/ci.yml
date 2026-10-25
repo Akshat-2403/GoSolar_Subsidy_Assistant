@@ -60,3 +60,5 @@ jobs:
         run: uv run python -m compileall -q app
       - name: Import backend application
         run: uv run python -c "import app.main; print('Backend import succeeded')"
+      - name: Run official dashboard benchmarks
+        run: uv run python ../scripts/run_benchmarks.py

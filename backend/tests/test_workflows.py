@@ -40,6 +40,9 @@ def test_valid_workflow_waits_at_human_review_and_calculates():
     assert data["human_approval_required"] is True
     assert data["financial_summary"]["estimated_subsidy_inr"] == 78000
     assert any(event["node"] == "human_review" and event["status"] == "waiting" for event in data["events"])
+    feeder_event = next(event for event in data["events"] if event["node"] == "net_metering_feasibility")
+    assert feeder_event["status"] == "waiting"
+    assert "transformer capacity are not available" in feeder_event["message"]
 
 
 def test_health_alias_and_offline_policy_mode(monkeypatch):
@@ -82,6 +85,13 @@ def test_capacity_above_sanctioned_load_is_blocked():
     assert any("exceeds sanctioned load" in issue for issue in data["issues"])
 
 
+def test_capacity_above_roof_area_limit_is_blocked():
+    data = evaluate(proposed_capacity_kw=3.6, rooftop_area_sqft=350)
+    assert data["state"] == "pending_items"
+    assert any("Roof area supports at most 3.50 kW" in issue for issue in data["issues"])
+    assert any(item["rule_applied"] == "roof_capacity_check" and item["outcome"] == "failed" for item in data["evidence_log"])
+
+
 def test_missing_documents_are_reported_case_insensitively():
     data = evaluate(required_documents=["Electricity bill", "Identity proof"], uploaded_documents=["electricity BILL"])
     assert data["state"] == "pending_items"
@@ -99,6 +109,11 @@ def test_approval_is_required_and_submits_to_mock_portal():
     assert result["state"] == "submitted"
     assert result["application_id"].startswith("APP-SOL-2026-")
     assert any(event["node"] == "portal_submission" for event in result["events"])
+    receipt_event = next(event for event in result["events"] if event["node"] == "portal_submission")
+    assert "not a subsidy approval" in receipt_event["message"]
+    verification_event = next(event for event in result["events"] if event["node"] == "application_id_verification")
+    assert verification_event["status"] == "completed"
+    assert result["application_id"] in verification_event["message"]
 
 
 def test_blocked_workflow_cannot_be_submitted():
@@ -128,6 +143,25 @@ def test_portal_rejects_capacity_above_load():
         "vendor_empanelled": True,
     })
     assert response.status_code == 422
+
+
+def test_mock_portal_submission_key_prevents_duplicate_receipts():
+    request = {
+        "applicant_name": "Asha Sharma",
+        "consumer_number": "ABCD12345678",
+        "discom_code": "MSEDCL",
+        "state": "Maharashtra",
+        "planned_capacity_kw": 3,
+        "sanctioned_load_kw": 5,
+        "vendor_id": "VENDOR-001",
+        "vendor_empanelled": True,
+        "submission_key": "BENCHMARK-IDEMPOTENCY-001",
+    }
+    first = portal_client.post("/api/applications", json=request)
+    second = portal_client.post("/api/applications", json=request)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["application_id"] == second.json()["application_id"]
 
 
 

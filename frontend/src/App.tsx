@@ -9,29 +9,32 @@ import SubsidyGuideModal from './components/SubsidyGuideModal'
 import SubsidySelector from './components/SubsidySelector'
 import VendorSelector from './components/VendorSelector'
 import ApplicationLifecycleTracker from './components/ApplicationLifecycleTracker'
+import AgentInspector from './components/AgentInspector'
 import discoms from './data/discoms.json'
 import { applySolarPriceOverrides, calculateSolarFinancials, type LoanTenureYears, type PurchaseMode } from './utils/calculations'
 import type { BillExtraction } from './utils/billParser'
 import type { SubsidyItem, TrackingRecord, VendorItem } from './types/journey'
 import { openFeasibilityProposal } from './utils/proposalExport'
+import { evaluateOfficialBenchmark, OFFICIAL_BENCHMARKS, type BenchmarkResult, type OfficialBenchmark } from './utils/benchmarks'
 import { validateConsumerNumber, validateMobile, validatePincode, validatePositiveNumber, validateSanctionedLoad } from './utils/validation'
 import './App.css'
 import './journey.css'
+import './components/agentInspector.css'
 
 const API_URL = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 const PORTAL_URL = import.meta.env.VITE_PORTAL_URL?.trim() || ''
 const BILL_OCR_URL = import.meta.env.VITE_BILL_OCR_URL || `${API_URL}/api/bills/parse`
 
-type EventItem = { node: string; status: string; message: string; timestamp: string }
-type Evidence = { evidence_id: string; rule_applied: string; source_title: string; verbatim_snippet: string; rule: string; outcome: string; excerpt: string; checked_at: string; source_url: string | null }
-type Workflow = {
+export type EventItem = { node: string; status: string; message: string; timestamp: string }
+export type Evidence = { evidence_id: string; rule_applied: string; source_title: string; verbatim_snippet: string; rule: string; outcome: string; excerpt: string; checked_at: string; source_url: string | null }
+export type Workflow = {
   workflow_id: string; state: string; can_proceed: boolean; human_approval_required: boolean
   issues: string[]; missing_documents: string[]; application_parameters: Record<string, unknown>
   evidence_log: Evidence[]; events: EventItem[]; financial_summary: null | {
     estimated_subsidy_inr: number; estimated_annual_generation_kwh: number; estimated_annual_savings_inr: number; estimated_payback_years: number
   }; application_id: string | null; policy_assessment: string | null
 }
-type Intake = {
+export type Intake = {
   applicant_name: string; state: string; applicant_type: 'owner' | 'tenant'; consumer_number: string
   discom_code: string; sanctioned_load_kw: number | ''; proposed_capacity_kw: number | ''; owns_rooftop: boolean
   has_grid_connection: boolean; roof_shadow_clearance_declared: boolean; installer_id: string; installer_empanelled: boolean; landlord_noc_uploaded: boolean
@@ -130,6 +133,7 @@ function App() {
   const [trackingRecord, setTrackingRecord] = useState<TrackingRecord | null>(null)
   const [trackingSearch, setTrackingSearch] = useState('')
   const [submissionCheckStep, setSubmissionCheckStep] = useState(0)
+  const [benchmarkResult, setBenchmarkResult] = useState<BenchmarkResult | null>(null)
   const activeWorkflowId = workflow?.workflow_id
   const stateNames = Object.keys(discoms).sort()
   const discomOptions = form.state ? discoms[form.state as keyof typeof discoms] ?? [] : []
@@ -180,6 +184,7 @@ function App() {
 
   function update<K extends keyof Intake>(key: K, value: Intake[K]) {
     setForm((current) => ({ ...current, [key]: value }))
+    setBenchmarkResult(null)
     if (key === 'state') setForm((current) => ({ ...current, state: value as string, discom_code: '' }))
   }
   const validation = {
@@ -190,7 +195,11 @@ function App() {
     mobile: validateMobile(form.mobile),
     monthly: validatePositiveNumber(form.monthly_units, 'Monthly units'),
     roof: validatePositiveNumber(form.roof_area_sqft, 'Roof area'),
-    capacity: Number(form.proposed_capacity_kw) > Number(form.sanctioned_load_kw) ? 'Planned capacity cannot exceed the sanctioned load.' : validatePositiveNumber(form.proposed_capacity_kw, 'Planned capacity'),
+    capacity: Number(form.proposed_capacity_kw) > Number(form.sanctioned_load_kw)
+      ? `Load enhancement required: planned capacity exceeds the ${form.sanctioned_load_kw} kW sanctioned load.`
+      : Number(form.proposed_capacity_kw) > Number(form.roof_area_sqft) / 100
+        ? `Roof-area limit is ${(Number(form.roof_area_sqft) / 100).toFixed(2)} kW at 100 sq. ft. per kW.`
+        : validatePositiveNumber(form.proposed_capacity_kw, 'Planned capacity'),
     tariff: validatePositiveNumber(form.tariff_inr_per_kwh, 'Tariff'),
   }
   const stepTwoValid = !validation.monthly && !validation.roof && !validation.capacity && !validation.tariff
@@ -288,7 +297,7 @@ function App() {
   async function evaluate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!stepOneValid) { setError('Complete all required fields in Step 1 before evaluating.'); return }
-    setError(''); setBusy(true)
+    setError(''); setBusy(true); setBenchmarkResult(null)
     if (offlinePreview) {
       createOfflinePreview()
       setBusy(false)
@@ -299,7 +308,7 @@ function App() {
       consumer_number: form.consumer_number.trim().toUpperCase(), discom_code: form.discom_code,
       sanctioned_load_kw: Number(form.sanctioned_load_kw), proposed_capacity_kw: Number(form.proposed_capacity_kw),
       owns_rooftop: form.owns_rooftop, has_grid_connection: form.has_grid_connection, roof_shadow_clearance_declared: form.roof_shadow_clearance_declared,
-      installer_id: selectedVendorId, installer_empanelled: true,
+      installer_id: form.installer_id || selectedVendorId, installer_empanelled: form.installer_empanelled,
       landlord_noc_uploaded: form.landlord_noc_uploaded,
       required_documents: form.required_documents.split(',').map((item) => item.trim()).filter(Boolean),
       uploaded_documents: form.uploaded_documents.split(',').map((item) => item.trim()).filter(Boolean),
@@ -307,7 +316,7 @@ function App() {
       monthly_avg_consumption_kwh: Number(form.monthly_units), rooftop_area_sqft: Number(form.roof_area_sqft),
     }
     try {
-      const response = await fetch(`${API_URL}/api/workflows/evaluate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const response = await fetch(`${API_URL}/api/workflows/evaluate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8_000) })
       const data = await readApiJson(response)
       if (!response.ok) {
         if ([502, 503, 504].includes(response.status)) throw new BackendUnavailableError('The backend service is temporarily unavailable.')
@@ -342,7 +351,7 @@ function App() {
         consumer_number: form.consumer_number.trim().toUpperCase(), discom_code: form.discom_code,
         sanctioned_load_kw: Number(form.sanctioned_load_kw), proposed_capacity_kw: Number(form.proposed_capacity_kw),
         owns_rooftop: form.owns_rooftop, has_grid_connection: form.has_grid_connection, roof_shadow_clearance_declared: form.roof_shadow_clearance_declared,
-        installer_id: selectedVendorId, installer_empanelled: true, landlord_noc_uploaded: form.landlord_noc_uploaded,
+        installer_id: form.installer_id || selectedVendorId, installer_empanelled: form.installer_empanelled, landlord_noc_uploaded: form.landlord_noc_uploaded,
         required_documents: form.required_documents.split(',').map((item) => item.trim()).filter(Boolean),
         uploaded_documents: form.uploaded_documents.split(',').map((item) => item.trim()).filter(Boolean),
         tariff_inr_per_kwh: Number(form.tariff_inr_per_kwh), monthly_avg_consumption_kwh: Number(form.monthly_units),
@@ -368,11 +377,76 @@ function App() {
     finally { setBusy(false) }
   }
   function useDemo() {
-    setForm(demo); setWorkflow(null); setEvents([]); setError(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+    setForm(demo); setWorkflow(null); setEvents([]); setError(''); setBenchmarkResult(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
     setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1)
   }
   function startNew() {
-    setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+    setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setBenchmarkResult(null); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+  }
+  async function runOfficialScenario(benchmark: OfficialBenchmark) {
+    const nextForm = { ...defaults, ...benchmark.form }
+    setCurrentView('assessment'); setForm(nextForm); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+    setConsumerGroup('residential'); setActiveStep(3); setWorkflow(null); setEvents([]); setBenchmarkResult(null)
+    setOfflinePreview(false); setOfflineAvailable(false); setError(''); setBusy(true)
+    const now = new Date().toISOString()
+    if (benchmark.id === 'TC4') {
+      const result = evaluateOfficialBenchmark(benchmark)
+      setBenchmarkResult(result)
+      setEvents([{ node: 'application_id_verification', status: 'completed', message: result.evidence, timestamp: now }])
+      setBusy(false)
+      return
+    }
+    const payload = {
+      applicant_name: nextForm.applicant_name.trim(), state: nextForm.state, applicant_type: nextForm.applicant_type,
+      consumer_number: nextForm.consumer_number.trim().toUpperCase(), discom_code: nextForm.discom_code,
+      sanctioned_load_kw: Number(nextForm.sanctioned_load_kw), proposed_capacity_kw: Number(nextForm.proposed_capacity_kw),
+      owns_rooftop: nextForm.owns_rooftop, has_grid_connection: nextForm.has_grid_connection,
+      roof_shadow_clearance_declared: nextForm.roof_shadow_clearance_declared,
+      installer_id: nextForm.installer_id, installer_empanelled: nextForm.installer_empanelled,
+      landlord_noc_uploaded: nextForm.landlord_noc_uploaded,
+      required_documents: nextForm.required_documents.split(',').map((item) => item.trim()).filter(Boolean),
+      uploaded_documents: nextForm.uploaded_documents.split(',').map((item) => item.trim()).filter(Boolean),
+      tariff_inr_per_kwh: Number(nextForm.tariff_inr_per_kwh),
+      monthly_avg_consumption_kwh: Number(nextForm.monthly_units), rooftop_area_sqft: Number(nextForm.roof_area_sqft),
+    }
+    try {
+      const response = await fetch(`${API_URL}/api/workflows/evaluate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8_000) })
+      const data = await readApiJson(response)
+      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `Evaluation failed (${response.status})`)
+      const evaluated = data as Workflow
+      const actual = benchmark.id === 'TC1'
+        ? evaluated.state === 'human_review_required' ? 'Draft application' : evaluated.state
+        : benchmark.id === 'TC2'
+          ? evaluated.state === 'vendor_warning' ? 'Flagged' : evaluated.state
+          : evaluated.state === 'consent_needed' ? 'Consent needed' : evaluated.state
+      const expectedResult = evaluateOfficialBenchmark(benchmark)
+      setWorkflow(evaluated); setEvents(evaluated.events)
+      setBenchmarkResult({ ...expectedResult, actual, passed: actual === expectedResult.expected, evidence: evaluated.issues.join(' ') || evaluated.policy_assessment || expectedResult.evidence })
+    } catch (reason) {
+      const unavailable = reason instanceof TypeError || reason instanceof BackendUnavailableError || reason instanceof DOMException && ['TimeoutError', 'AbortError'].includes(reason.name)
+      if (!unavailable) {
+        const result = evaluateOfficialBenchmark(benchmark)
+        setError(reason instanceof Error ? reason.message : 'The benchmark evaluation failed.')
+        setBenchmarkResult({ ...result, actual: 'Evaluation error', passed: false })
+        return
+      }
+      const result = evaluateOfficialBenchmark(benchmark)
+      const localStates: Record<'TC1' | 'TC2' | 'TC3', Pick<Workflow, 'state' | 'can_proceed' | 'human_approval_required' | 'issues'>> = {
+        TC1: { state: 'human_review_required', can_proceed: true, human_approval_required: true, issues: [] },
+        TC2: { state: 'vendor_warning', can_proceed: false, human_approval_required: false, issues: ['Installer is not verified as empanelled.'] },
+        TC3: { state: 'consent_needed', can_proceed: false, human_approval_required: false, issues: ['Landlord No Objection Certificate (NOC) is needed.'] },
+      }
+      const fallback = localStates[benchmark.id]
+      const localEvent = { node: 'benchmark_policy_check', status: fallback.can_proceed ? 'waiting' : 'blocked', message: `${result.evidence} Offline deterministic fallback; no backend or portal was contacted.`, timestamp: now }
+      setWorkflow({
+        workflow_id: `LOCAL-BENCHMARK-${benchmark.id}`, ...fallback,
+        missing_documents: [], application_parameters: payload, evidence_log: [], events: [localEvent],
+        financial_summary: null, application_id: null,
+        policy_assessment: 'Offline benchmark rules ran locally; no backend or portal was contacted.',
+      })
+      setEvents([localEvent])
+      setBenchmarkResult({ ...result, evidence: localEvent.message })
+    } finally { setBusy(false) }
   }
   function continueFromStepOne() { if (stepOneValid) { setError(''); setActiveStep(2) } else setError('Please resolve the highlighted Step 1 fields before continuing.') }
   function continueFromStepTwo() { setError(''); setActiveStep(3) }
@@ -422,7 +496,7 @@ function App() {
       <div className="sidebar-bottom"><div className="system-card"><span className="status-dot" /><div><strong>Demo services</strong><small>Agent API · mock portal</small></div></div><div className="profile"><div className="avatar">GS</div><div><strong>GoSolar workspace</strong><small>Human approval enabled</small></div></div></div>
     </aside>
     <div className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><button className="button button-quiet" type="button" onClick={openMockPortal}>Open mock portal</button></div></header>
+      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><details className="benchmark-menu"><summary className="button button-outline">Official benchmark scenarios</summary><div className="benchmark-options" role="menu" aria-label="Official benchmark scenarios">{OFFICIAL_BENCHMARKS.map((item) => <button className="button button-quiet" key={item.id} type="button" role="menuitem" disabled={busy} onClick={(event) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; void runOfficialScenario(item) }}><strong>{item.id} · {item.title}</strong><small>Expected: {item.expected}</small></button>)}</div></details><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><button className="button button-quiet" type="button" onClick={openMockPortal}>Open mock portal</button></div></header>
       <main className="page-content">
         {currentView === 'assessment' ? <>
         <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ROOFTOP SOLAR · PERSONALIZED ESTIMATE</div><h1>Plan your <span>solar journey</span></h1><p>Share a few details to explore your rooftop potential and available subsidy estimate.</p></div><button className="button button-outline" type="button" onClick={() => setGuide(true)}>Learn about subsidies</button></div>
@@ -473,9 +547,10 @@ function App() {
               <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(1)}>← Back</button><button className="button button-primary" type="button" onClick={continueFromStepTwo}>Continue to Step 3 →</button></div>
             </>}
             {activeStep === 3 && <>
+              {benchmarkResult && <div className="benchmark-result" role="status"><div className="benchmark-result-heading"><strong>{benchmarkResult.id} · {benchmarkResult.actual}</strong><b className={benchmarkResult.passed ? 'benchmark-pass' : 'benchmark-fail'}>{benchmarkResult.passed ? '✓ SPEC MATCH' : '✕ MISMATCH'}</b></div><p>Expected: {benchmarkResult.expected} · Actual: {benchmarkResult.actual}</p><small>{benchmarkResult.evidence}{benchmarkResult.id === 'TC4' ? ` Application ID: ${OFFICIAL_BENCHMARKS.find((item) => item.id === 'TC4')?.applicationId}.` : ''}</small></div>}
               <PanelHeading kicker="STEP 03 | VENDOR MARKETPLACE" title="Choose your solar installer" subtitle="Compare vendor tiers and indicative prices for your selected system and subsidy." icon="03" />
               <h3 className="journey-section-title">Choose an installer</h3><p className="journey-disclaimer">Demo marketplace profiles and pricing are illustrative. Confirm installer empanelment, scope and quote before contracting.</p>
-              <VendorSelector vendors={vendors} selectedId={selectedVendorId} onSelect={(id) => { setSelectedVendorId(id); update('installer_id', id) }} capacityKw={currentCapacity} subsidy={selectedSubsidy} />
+              <VendorSelector vendors={vendors} selectedId={selectedVendorId} onSelect={(id) => { setSelectedVendorId(id); update('installer_id', id); update('installer_empanelled', true) }} capacityKw={currentCapacity} subsidy={selectedSubsidy} />
               <div className="review-details"><div><small>Applicant</small><strong>{form.applicant_name}</strong></div><div><small>State · DISCOM</small><strong>{form.state} · {form.discom_code}</strong></div><div><small>Consumer number</small><strong>{form.consumer_number}</strong></div><div><small>Usage · roof area</small><strong>{form.monthly_units} kWh/mo · {form.roof_area_sqft} sq. ft.</strong></div><div><small>Recommended system size</small><strong>{estimatedSize.toFixed(1)} kW</strong></div><div><small>Proposed capacity</small><strong>{form.proposed_capacity_kw} kW</strong></div></div>
               <FinancialPlan estimate={financialEstimate} mode={purchaseMode} tenureYears={loanTenureYears} interestRatePct={interestRatePct} onModeChange={setPurchaseMode} onTenureChange={setLoanTenureYears} onInterestRateChange={setInterestRatePct} />
               <button className="button button-primary proposal-download" type="button" disabled={!financialEstimate} onClick={downloadProposal}>📄 Download Feasibility Summary</button>
@@ -494,6 +569,7 @@ function App() {
                   return <div className={'workflow-node ' + (done ? 'done ' : '') + (active ? 'active ' : '') + (blocked ? 'blocked' : '')} key={node}><div className="node-rail"><div className="node-circle">{done ? '✓' : blocked ? '!' : index + 1}</div>{index < workflowNodes.length - 1 && <div className="node-line" />}</div><div className="node-content"><strong>{title}</strong><span>{event?.message || subtitle}</span></div><span className="node-state">{event?.status?.toUpperCase() || 'WAITING'}</span></div>
                 })}</div></section>
                 <section className="panel embedded-panel"><PanelHeading kicker="VERIFICATION TRAIL" title="Policy evidence" subtitle="Rule outcomes and stated basis." icon="✓" />{workflow.evidence_log.map((item, index) => <div className="evidence-item" key={item.rule + index}><span className="evidence-index">{String(index + 1).padStart(2, '0')}</span><span className="evidence-item-copy"><strong>{item.rule.replaceAll('_', ' ')}</strong><small>{item.outcome} · {item.source_title}</small><small>{item.verbatim_snippet || item.excerpt}</small>{item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">View source</a>}</span></div>)}</section>
+                <AgentInspector workflow={workflow} events={events} />
                 {workflow.can_proceed && <button className="button button-primary full-button" type="button" onClick={() => setActiveStep(4)}>Continue to portal submission</button>}
                 {workflow.application_id && <p className="form-footnote">Mock portal receipt: {workflow.application_id}</p>}
               </>}

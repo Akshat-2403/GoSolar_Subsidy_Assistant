@@ -67,7 +67,7 @@ export function calculateMonthlyEmi(principalInr: number, annualInterestRatePct 
 export function calculateSolarFinancials(inputs: SolarFinancialInputs, annualInterestRatePct = 7, tenureYears: LoanTenureYears = 5): SolarFinancialEstimate {
   const monthlyUnits = Math.max(0, inputs.monthlyUnits)
   const sanctionedLoad = Math.max(0, inputs.sanctionedLoadKw)
-  const roofCapacity = Math.max(0, inputs.roofAreaSqft / 80)
+  const roofCapacity = Math.max(0, inputs.roofAreaSqft / 100)
   const requestedCapacity = inputs.proposedCapacityKw > 0 ? inputs.proposedCapacityKw : Number.POSITIVE_INFINITY
   const systemCapacityKw = Math.max(0, Math.min(sanctionedLoad, roofCapacity || Number.POSITIVE_INFINITY, requestedCapacity, monthlyUnits / 120))
   const grossSystemCostInr = estimateSystemCost(systemCapacityKw)

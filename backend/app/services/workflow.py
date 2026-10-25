@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from app.portal.mock_portal import PortalApplication, create_application
+from app.portal.mock_portal import PortalApplication, create_application, read_application
 from app.schemas.workflow import (
     EvidenceRecord,
     FinancialSummary,
@@ -61,6 +61,7 @@ def _post_to_portal(parameters: dict) -> dict:
         "sanctioned_load_kw": parameters["sanctioned_load_kw"],
         "vendor_id": parameters["installer_id"],
         "vendor_empanelled": parameters["installer_empanelled"],
+        "submission_key": parameters.get("workflow_id"),
     }
     portal_url = os.getenv("MOCK_PORTAL_URL", "").rstrip("/")
     if not portal_url:
@@ -101,6 +102,24 @@ def _record_event(workflow: WorkflowResponse, node: str, status: str, message: s
     return workflow.model_copy(update={"events": [*workflow.events, event]}, deep=True)
 
 
+def _verify_portal_application(application_id: str) -> dict:
+    """Read the receipt independently from the portal after submitting it."""
+    portal_url = os.getenv("MOCK_PORTAL_URL", "").rstrip("/")
+    if not portal_url:
+        observed = read_application(application_id)
+    else:
+        request = urllib.request.Request(
+            f"{portal_url}/api/applications/{application_id}",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            observed = json.loads(response.read().decode("utf-8"))
+    if observed.get("application_id") != application_id:
+        raise RuntimeError("Mock portal verification did not return the submitted application ID.")
+    return observed
+
+
 def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> WorkflowResponse:
     issues: list[str] = []
     evidence: list[EvidenceRecord] = []
@@ -139,6 +158,13 @@ def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> Workf
         record("capacity_check", "failed", "Proposed capacity exceeds the declared sanctioned load.")
     else:
         record("capacity_check", "passed", "Proposed capacity is within the declared sanctioned load.")
+    if request.rooftop_area_sqft is not None:
+        roof_capacity_limit = request.rooftop_area_sqft / 100
+        if request.proposed_capacity_kw > roof_capacity_limit:
+            issues.append(f"Roof area supports at most {roof_capacity_limit:.2f} kW at 100 sq. ft. per kW.")
+            record("roof_capacity_check", "failed", "Planned capacity exceeds the declared roof-area planning limit of 100 sq. ft. per kW.")
+        else:
+            record("roof_capacity_check", "passed", "Planned capacity is within the declared roof-area planning limit of 100 sq. ft. per kW.")
     if not request.installer_empanelled:
         issues.append(f"Installer '{request.installer_id}' is not verified as empanelled.")
         record("installer_empanelment", "failed", "Installer status is supplied by the applicant and is not independently verified.")
@@ -163,7 +189,7 @@ def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> Workf
     elif request.applicant_type == "tenant" and not request.landlord_noc_uploaded:
         state = "consent_needed"
         status = "blocked"
-    elif not request.owns_rooftop or not request.has_grid_connection or request.proposed_capacity_kw > request.sanctioned_load_kw or missing_documents:
+    elif not request.owns_rooftop or not request.has_grid_connection or request.proposed_capacity_kw > request.sanctioned_load_kw or (request.rooftop_area_sqft is not None and request.proposed_capacity_kw > request.rooftop_area_sqft / 100) or missing_documents:
         state = "pending_items"
         status = "blocked"
     else:
@@ -205,7 +231,7 @@ def _evaluate_workflow_core(request: WorkflowRequest, workflow_id: str) -> Workf
     )
     response = _record_event(response, "validate_input", "completed", "Application data passed structural validation.")
     response = _record_event(response, "policy_checks", status, "Ownership, grid, capacity, vendor, consent, and document checks completed.")
-    response = _record_event(response, "net_metering_feasibility", "completed" if request.has_grid_connection else "blocked", "Grid connection checked; DISCOM meter sanction remains pending.")
+    response = _record_event(response, "net_metering_feasibility", "waiting" if request.has_grid_connection else "blocked", "Grid connection declared. Feeder and distribution-transformer capacity are not available in the demo data; DISCOM technical sanction is still required.")
     response = _record_event(response, "roof_shadow_clearance", "waiting", "Applicant declaration recorded where provided; physical shadow and structure survey remains a vendor site step.")
     response = _record_event(response, "sanctioned_load_audit", "completed" if request.proposed_capacity_kw <= request.sanctioned_load_kw else "blocked", "Planned capacity compared with the declared sanctioned load.")
     if response.financial_summary:
@@ -235,7 +261,9 @@ def get_workflow(workflow_id: str) -> WorkflowResponse | None:
 
 def _submit_approved_workflow(workflow: WorkflowResponse) -> WorkflowResponse:
     try:
-        portal_result = _post_to_portal(workflow.application_parameters)
+        parameters = {**workflow.application_parameters, "workflow_id": workflow.workflow_id}
+        portal_result = _post_to_portal(parameters)
+        verified_record = _verify_portal_application(portal_result["application_id"])
     except Exception as exc:
         queued = workflow.model_copy(
             update={
@@ -258,7 +286,8 @@ def _submit_approved_workflow(workflow: WorkflowResponse) -> WorkflowResponse:
         },
         deep=True,
     )
-    submitted = _record_event(submitted, "portal_submission", "submitted", f"Mock portal accepted the application as {portal_result['application_id']}.")
+    submitted = _record_event(submitted, "portal_submission", "submitted", f"Mock portal issued receipt {portal_result['application_id']}; this is not a subsidy approval or payment confirmation.")
+    submitted = _record_event(submitted, "application_id_verification", "completed", f"Independent portal read matched the submitted ID {verified_record['application_id']}; subsidy approval remains unconfirmed.")
     return _record_event(submitted, "audit_record", "completed", "Simulated submission result recorded in the workflow evidence trail.")
 
 
