@@ -10,6 +10,7 @@ import SubsidySelector from './components/SubsidySelector'
 import VendorSelector from './components/VendorSelector'
 import ApplicationLifecycleTracker from './components/ApplicationLifecycleTracker'
 import AgentInspector from './components/AgentInspector'
+import ThemeToggle, { type ThemeMode } from './components/ThemeToggle'
 import discoms from './data/discoms.json'
 import { applySolarPriceOverrides, calculateSolarFinancials, type LoanTenureYears, type PurchaseMode } from './utils/calculations'
 import type { BillExtraction } from './utils/billParser'
@@ -17,13 +18,33 @@ import type { SubsidyItem, TrackingRecord, VendorItem } from './types/journey'
 import { openFeasibilityProposal } from './utils/proposalExport'
 import { evaluateOfficialBenchmark, OFFICIAL_BENCHMARKS, type BenchmarkResult, type OfficialBenchmark } from './utils/benchmarks'
 import { validateConsumerNumber, validateMobile, validatePincode, validatePositiveNumber, validateSanctionedLoad } from './utils/validation'
+import { createTrackingId, getApplication, saveApplication, type SolarApplication } from './utils/applicationStore'
 import './App.css'
 import './journey.css'
 import './components/agentInspector.css'
+import './theme.css'
 
 const API_URL = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 const PORTAL_URL = import.meta.env.VITE_PORTAL_URL?.trim() || ''
 const BILL_OCR_URL = import.meta.env.VITE_BILL_OCR_URL || `${API_URL}/api/bills/parse`
+const currency = (amount: number) => `₹${Math.max(0, Math.round(amount)).toLocaleString('en-IN')}`
+
+function createSolarApplication(trackingId: string, form: Intake, capacity: number, subsidy: number, createdAt: string): SolarApplication {
+  return saveApplication({ trackingId, createdAt, applicantName: form.applicant_name, consumerNumber: form.consumer_number, state: form.state, discom: form.discom_code, systemCapacityKw: capacity, subsidyAmount: subsidy, status: 'SUBMITTED', activeStepIndex: 0, timeline: [
+    { label: 'Assessment saved in GoSolar tracker', date: createdAt, status: 'completed' },
+    { label: 'DISCOM technical feasibility review', date: '', status: 'in_progress' },
+    { label: 'Vendor site inspection', date: '', status: 'pending' },
+    { label: 'Net meter installation', date: '', status: 'pending' },
+    { label: 'Subsidy credit', date: '', status: 'pending' },
+  ] })
+}
+
+function trackingRecordFromApplication(app: SolarApplication): TrackingRecord {
+  const labels = ['Assessment saved in GoSolar tracker', 'DISCOM Technical Feasibility Approved', 'Vendor Site Inspection Scheduled', 'Net Meter Installed', 'Subsidy Disbursed to Bank Account']
+  return { tracking_id: app.trackingId, application_id: null, status: 'assessment_saved', current_stage: app.activeStepIndex, submitted_at: app.createdAt, updated_at: app.createdAt,
+    milestones: labels.map((title, index) => ({ title, status: index < app.activeStepIndex || index === 0 ? 'completed' : index === app.activeStepIndex + 1 ? 'in_progress' : 'pending', timestamp: app.timeline[index]?.date || null })),
+    agent_validation_logs: [], application: { applicant_name: app.applicantName, state: app.state, consumer_number: app.consumerNumber, discom_code: app.discom, address: '', system_size_kw: app.systemCapacityKw, sanctioned_load_kw: app.systemCapacityKw, subsidy: { id: 'pm-surya-ghar', name: 'PM Surya Ghar', estimated_inr: app.subsidyAmount }, vendor: { id: 'waaree-eco', name: 'Installer selection pending', price_per_kw: 0 } } }
+}
 
 export type EventItem = { node: string; status: string; message: string; timestamp: string }
 export type Evidence = { evidence_id: string; rule_applied: string; source_title: string; verbatim_snippet: string; rule: string; outcome: string; excerpt: string; checked_at: string; source_url: string | null }
@@ -87,10 +108,6 @@ const workflowNodes = [
 ]
 const submissionChecks = ['Verify net-metering compatibility', 'Check roof and shadow-clearance declaration', 'Audit proposed capacity against sanctioned load']
 
-function stateCode(state: string): string {
-  const known: Record<string, string> = { Maharashtra: 'MH', Gujarat: 'GJ', Delhi: 'DL', Karnataka: 'KA', Rajasthan: 'RJ', 'Tamil Nadu': 'TN' }
-  return known[state] || state.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'IN'
-}
 function makeLocalTracking(id: string, form: Intake, subsidy: SubsidyItem | undefined, vendor: VendorItem | undefined, size: number, now: string, logs: EventItem[]): TrackingRecord {
   const milestones = ['Application Submitted', 'DISCOM Technical Feasibility Approved', 'Vendor Site Inspection Scheduled', 'Net Meter Installed', 'Subsidy Disbursed to Bank Account']
   return {
@@ -124,6 +141,9 @@ function App() {
   const [interestRatePct, setInterestRatePct] = useState(7)
   const [billUploadKey, setBillUploadKey] = useState(0)
   const [currentView, setCurrentView] = useState<'assessment' | 'tracking'>('assessment')
+  const [theme, setTheme] = useState<ThemeMode>(() => { try { return localStorage.getItem('gosolar-theme') === 'dark' ? 'dark' : 'light' } catch { return 'light' } })
+  const [assessmentTrackingId, setAssessmentTrackingId] = useState('')
+  const [trackingCopied, setTrackingCopied] = useState(false)
   const [portalOpen, setPortalOpen] = useState(false)
   const [consumerGroup, setConsumerGroup] = useState<'residential' | 'agricultural' | 'rwa'>('residential')
   const [subsidies, setSubsidies] = useState<SubsidyItem[]>(fallbackSchemes)
@@ -135,6 +155,10 @@ function App() {
   const [submissionCheckStep, setSubmissionCheckStep] = useState(0)
   const [benchmarkResult, setBenchmarkResult] = useState<BenchmarkResult | null>(null)
   const activeWorkflowId = workflow?.workflow_id
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try { localStorage.setItem('gosolar-theme', theme) } catch { /* Theme remains active for this session. */ }
+  }, [theme])
   const stateNames = Object.keys(discoms).sort()
   const discomOptions = form.state ? discoms[form.state as keyof typeof discoms] ?? [] : []
   const currentCapacity = Number(form.proposed_capacity_kw) || 0
@@ -264,6 +288,12 @@ function App() {
     if (!opened) setError('Your browser blocked the proposal window. Allow pop-ups for GoSolar and try again.')
   }
 
+  function ensureAssessmentTrackingId() {
+    const id = assessmentTrackingId || createTrackingId()
+    setAssessmentTrackingId(id)
+    if (financialEstimate) createSolarApplication(id, form, estimatedSize, financialEstimate.subsidyInr, new Date().toISOString())
+  }
+
   function createOfflinePreview(): boolean {
     if (!financialEstimate) {
       setError('Complete the financial inputs before creating a local preview.')
@@ -289,6 +319,7 @@ function App() {
       application_id: null, policy_assessment: 'Local preview estimate only. No backend, policy source, or portal was contacted.',
     })
     setEvents(mockEvents)
+    ensureAssessmentTrackingId()
     setOfflinePreview(true)
     setOfflineAvailable(false)
     return true
@@ -322,7 +353,7 @@ function App() {
         if ([502, 503, 504].includes(response.status)) throw new BackendUnavailableError('The backend service is temporarily unavailable.')
         throw new Error(typeof data.detail === 'string' ? data.detail : `Evaluation failed (${response.status})`)
       }
-      setWorkflow(data as Workflow); setEvents(data.events as EventItem[])
+      setWorkflow(data as Workflow); setEvents(data.events as EventItem[]); ensureAssessmentTrackingId()
     } catch (reason) {
       if (reason instanceof TypeError || reason instanceof BackendUnavailableError) {
         createOfflinePreview()
@@ -338,7 +369,8 @@ function App() {
     setSubmissionCheckStep(0)
     if (offlinePreview) {
       const now = new Date().toISOString()
-      const trackingId = `SOLAR-${stateCode(form.state)}-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 900000) + 100000)}`
+      const trackingId = assessmentTrackingId || createTrackingId()
+      setAssessmentTrackingId(trackingId)
       const record = makeLocalTracking(trackingId, form, selectedSubsidy, vendors.find((item) => item.id === selectedVendorId), estimatedSize, now, events)
       saveLocalTracking(record); setTrackingRecord(record)
       setWorkflow({ ...workflow, state: 'submitted', human_approval_required: false, application_id: `LOCAL-DEMO-${Date.now().toString().slice(-6)}` }); setActiveStep(5)
@@ -365,6 +397,10 @@ function App() {
         throw new Error(typeof data.detail === 'string' ? data.detail : `Submission failed (${response.status})`)
       }
       const record = data as unknown as TrackingRecord
+      if (record.tracking_id && record.tracking_id !== assessmentTrackingId && financialEstimate) {
+        setAssessmentTrackingId(record.tracking_id)
+        createSolarApplication(record.tracking_id, form, estimatedSize, financialEstimate.subsidyInr, record.submitted_at || new Date().toISOString())
+      }
       setTrackingRecord(record); saveLocalTracking(record)
       setWorkflow({ ...workflow, state: 'submitted', human_approval_required: false, application_id: record.application_id }); setEvents(record.agent_validation_logs.map((log) => ({ node: log.stage, status: log.status, message: log.message, timestamp: log.timestamp }))); setActiveStep(5)
     } catch (reason) {
@@ -377,11 +413,11 @@ function App() {
     finally { setBusy(false) }
   }
   function useDemo() {
-    setForm(demo); setWorkflow(null); setEvents([]); setError(''); setBenchmarkResult(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+    setForm(demo); setWorkflow(null); setEvents([]); setError(''); setBenchmarkResult(null); setAssessmentTrackingId(''); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
     setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1)
   }
   function startNew() {
-    setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setBenchmarkResult(null); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
+    setForm(defaults); setWorkflow(null); setEvents([]); setError(''); setBenchmarkResult(null); setAssessmentTrackingId(''); setActiveStep(1); setOfflinePreview(false); setOfflineAvailable(false); setBillUploadKey((key) => key + 1); setTrackingRecord(null); setConsumerGroup('residential'); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
   }
   async function runOfficialScenario(benchmark: OfficialBenchmark) {
     const nextForm = { ...defaults, ...benchmark.form }
@@ -455,6 +491,8 @@ function App() {
     if (!key) { setError('Enter your GoSolar tracking ID.'); return }
     setError('')
     try {
+      const localApplication = getApplication(key)
+      if (localApplication) { setTrackingRecord(trackingRecordFromApplication(localApplication)); return }
       const response = await fetch(`${API_URL}/api/track/${encodeURIComponent(key)}`)
       if (response.ok) { const record = await response.json() as TrackingRecord; setTrackingRecord(record); return }
     } catch { /* The local saved receipt is the offline fallback. */ }
@@ -474,6 +512,11 @@ function App() {
     const now = new Date().toISOString()
     const next = { ...trackingRecord, current_stage: nextIndex, status: nextIndex === trackingRecord.milestones.length - 1 ? 'completed' : 'in_progress', updated_at: now, milestones: trackingRecord.milestones.map((item, index) => index === nextIndex ? { ...item, status: 'completed', timestamp: now } : item), agent_validation_logs: [...trackingRecord.agent_validation_logs, { timestamp: now, stage: 'demo_stage_advance', message: `Demo lifecycle advanced to ${trackingRecord.milestones[nextIndex].title}.`, status: 'completed' }] }
     setTrackingRecord(next); saveLocalTracking(next)
+    const application = getApplication(next.tracking_id)
+    if (application) {
+      const activeStepIndex = Math.min(nextIndex, application.timeline.length - 1)
+      saveApplication({ ...application, activeStepIndex, status: (['SUBMITTED', 'FEASIBILITY_APPROVED', 'VENDOR_ASSIGNED', 'METER_INSTALLED', 'SUBSIDY_CREDITED'][activeStepIndex] as SolarApplication['status']), timeline: application.timeline.map((item, index) => index === activeStepIndex ? { ...item, date: now, status: 'completed' } : index === activeStepIndex + 1 ? { ...item, status: 'in_progress' } : item) })
+    }
   }
   async function rescheduleTracking() {
     if (!trackingRecord) return
@@ -492,18 +535,18 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">☼</div><div><strong>GoSolar<span>.</span></strong><small>SUBSIDY ASSISTANT</small></div></div>
       <div className="workspace-label">YOUR APPLICATION</div>
-      <nav className="nav-list"><button className={`nav-item ${currentView === 'assessment' ? 'selected' : ''}`} onClick={() => setCurrentView('assessment')}><span className="nav-icon">A</span>New assessment</button><button className={`nav-item ${currentView === 'tracking' ? 'selected' : ''}`} onClick={() => setCurrentView('tracking')}><span className="nav-icon">T</span>Track application</button><button className="nav-item" onClick={() => { startNew(); setCurrentView('assessment') }}><span className="nav-icon">R</span>Start over</button></nav>
+      <div className="sidebar-context">Estimate your rooftop potential, then follow the local demo milestones.</div>
       <div className="sidebar-bottom"><div className="system-card"><span className="status-dot" /><div><strong>Demo services</strong><small>Agent API · mock portal</small></div></div><div className="profile"><div className="avatar">GS</div><div><strong>GoSolar workspace</strong><small>Human approval enabled</small></div></div></div>
     </aside>
     <div className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><strong>GoSolar</strong><span>/</span>{currentView === 'assessment' ? 'New solar assessment' : 'Track application'}</div><div className="topbar-right"><details className="benchmark-menu"><summary className="button button-outline">Official benchmark scenarios</summary><div className="benchmark-options" role="menu" aria-label="Official benchmark scenarios">{OFFICIAL_BENCHMARKS.map((item) => <button className="button button-quiet" key={item.id} type="button" role="menuitem" disabled={busy} onClick={(event) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; void runOfficialScenario(item) }}><strong>{item.id} · {item.title}</strong><small>Expected: {item.expected}</small></button>)}</div></details><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>Track Application</button></div><div className="env-pill"><span className="status-dot" />{offlinePreview ? 'OFFLINE PREVIEW' : 'AGENT API'}</div><button className="button button-quiet" type="button" onClick={useDemo}>Try Demo</button><button className="button button-quiet" type="button" onClick={openMockPortal}>Open mock portal</button></div></header>
+      <header className="topbar"><div className="topbar-spacer" /><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>⚡ New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>📍 Track Application</button></div><div className="topbar-actions"><details className="benchmark-menu"><summary className="button button-outline">Benchmarks</summary><div className="benchmark-options" role="menu" aria-label="Official benchmark scenarios">{OFFICIAL_BENCHMARKS.map((item) => <button className="button button-quiet" key={item.id} type="button" role="menuitem" disabled={busy} onClick={(event) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; void runOfficialScenario(item) }}><strong>{item.id} · {item.title}</strong><small>Expected: {item.expected}</small></button>)}</div></details><button className="button button-outline header-action" type="button" onClick={() => { startNew(); setCurrentView('assessment') }}><span aria-hidden="true">↻</span>Start Over</button><button className="button button-quiet header-action" type="button" onClick={useDemo}>⚡ Try Demo</button><button className="button button-quiet header-action" type="button" onClick={() => setPortalOpen(true)}>Mock Portal</button><ThemeToggle mode={theme} onChange={setTheme} /></div></header>
       <main className="page-content">
         {currentView === 'assessment' ? <>
         <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ROOFTOP SOLAR · PERSONALIZED ESTIMATE</div><h1>Plan your <span>solar journey</span></h1><p>Share a few details to explore your rooftop potential and available subsidy estimate.</p></div><button className="button button-outline" type="button" onClick={() => setGuide(true)}>Learn about subsidies</button></div>
         <ProgressBar activeStep={activeStep} />
         {error && <div className="notice notice-warning" role="alert"><span className="notice-symbol">!</span><span>{error}</span>{offlineAvailable && <button type="button" className="button button-quiet offline-action" onClick={() => { setOfflinePreview(true); setOfflineAvailable(false); setError('') }}>Continue in offline preview</button>}<button type="button" aria-label="Dismiss message" onClick={() => setError('')}>×</button></div>}
         {offlinePreview && <div className="offline-note" role="status">Offline preview is active. Estimates are local approximations; no policy checks or portal submissions will be made.</div>}
-        {workflow?.issues.map((issue) => <div className="notice notice-warning" key={issue}><span className="notice-symbol">!</span>{issue}</div>)}
+        {workflow?.issues.length ? <div className="notice notice-warning" role="status"><span className="notice-symbol">!</span>Some requirements need further review. Open Technical details for the verification record.</div> : null}
         {workflow?.state === 'submitted' && <div className="notice notice-success"><span className="notice-symbol">✓</span>{offlinePreview ? 'Offline preview completed. No application was sent to a portal.' : 'Mock portal accepted the filing. This is a demonstration receipt, not a government approval.'}</div>}
         <div className="wizard-layout">
           <section className="panel wizard-panel">
@@ -558,9 +601,13 @@ function App() {
               <div className="step-three-actions"><button className="button button-quiet" type="button" onClick={() => setActiveStep(2)}>← Back</button><button className="button button-primary" type="button" disabled={busy} onClick={() => { const formEl = document.getElementById('evaluate-form') as HTMLFormElement | null; formEl?.requestSubmit() }}>{busy ? 'Evaluating…' : offlinePreview ? 'Create offline preview' : workflow ? 'Re-evaluate application' : 'Run subsidy & verification check'}</button></div>
               <form id="evaluate-form" onSubmit={evaluate} />
               {workflow && <>
-                <div className="workflow-result"><div className="live-pill live-active"><span />{workflow.state.replaceAll('_', ' ').toUpperCase()}</div><p>{workflow.policy_assessment || 'Assessment complete.'}</p>
-                  {workflow.financial_summary && <div className="finance-foot"><div><span>Estimated subsidy</span><strong>₹{workflow.financial_summary.estimated_subsidy_inr.toLocaleString('en-IN')}</strong></div><div><span>Annual generation</span><strong>{workflow.financial_summary.estimated_annual_generation_kwh.toLocaleString('en-IN')} kWh</strong></div><div><span>Annual savings</span><strong>₹{workflow.financial_summary.estimated_annual_savings_inr.toLocaleString('en-IN')}</strong></div><div><span>Estimated payback</span><strong>{workflow.financial_summary.estimated_payback_years} years</strong></div></div>}
-                </div>
+                <section className="consumer-results" aria-label="Assessment summary">
+                  <div className={`feasibility-banner ${workflow.can_proceed ? 'is-clear' : 'is-review'}`}><span className="verdict-mark" aria-hidden="true">{workflow.can_proceed ? '✓' : '!'}</span><div><strong>{workflow.can_proceed ? 'Preliminary check: potentially eligible for Central Subsidy under PM Surya Ghar Yojana' : 'More review is needed before subsidy eligibility can be assessed'}</strong><p>{workflow.can_proceed ? 'This is an estimate based on the details provided. Final eligibility and sanction are subject to official verification.' : (workflow.issues[0] || 'Resolve the listed requirements and confirm eligibility with the DISCOM.')}</p></div></div>
+                  <div className="consumer-result-grid"><article className="consumer-result-card"><span className="result-kicker">TECHNICAL FEASIBILITY</span><h3>Capacity check</h3><p>Sanctioned load ({Number(form.sanctioned_load_kw).toFixed(1)} kW) and recommended solar array ({estimatedSize.toFixed(1)} kW) are shown for comparison. Local DISCOM feeder and distribution transformer capacity still require official verification.</p></article>
+                    <article className="consumer-result-card"><span className="result-kicker">ESTIMATED FINANCIAL IMPACT</span><h3>Indicative 25-year outlook</h3>{financialEstimate ? <div className="result-metrics"><div><span>Estimated net out-of-pocket cost</span><strong>{currency(financialEstimate.netPayableInr)}</strong></div><div><span>Estimated net savings over 25 years</span><strong>{currency(financialEstimate.twentyFiveYearNetSavingsInr)}</strong></div></div> : <p>Complete the system and bill details to see an estimate.</p>}<small>Values are estimates; actual quotes, subsidy and bill savings may differ.</small></article></div>
+                  {assessmentTrackingId && <div className="tracking-id-banner"><div><span className="result-kicker">YOUR APPLICATION TRACKING ID</span><strong>{assessmentTrackingId}</strong><small>Saved in this browser's GoSolar tracker. This assessment is not a portal filing.</small></div><div className="tracking-id-actions"><button className="button button-outline" type="button" onClick={() => { if (!navigator.clipboard) { setError('Clipboard access is unavailable. Select and copy the tracking ID.'); return } void navigator.clipboard.writeText(assessmentTrackingId).then(() => { setTrackingCopied(true); window.setTimeout(() => setTrackingCopied(false), 1800) }).catch(() => setError('Clipboard access is unavailable. Select and copy the tracking ID.')) }}>{trackingCopied ? 'Copied' : 'Copy ID'}</button><button className="button button-primary" type="button" onClick={() => { const application = getApplication(assessmentTrackingId); if (!application) { setError('This browser could not save the assessment record.'); return } setTrackingSearch(assessmentTrackingId); setCurrentView('tracking'); setError(''); setTrackingRecord(trackingRecordFromApplication(application)) }}>Track Application Progress →</button></div></div>}
+                </section>
+                <details className="debug-details"><summary>Technical details and verification record</summary>
                 <section className="panel embedded-panel"><PanelHeading kicker="AGENT WORKFLOW" title="Evaluation progress" subtitle="Intake checks, policy evidence and human review." icon="AI" /><div className="workflow-list">{workflowNodes.map(([node, title, subtitle], index) => {
                   const event = events.find((item) => item.node === node)
                   const done = event?.status === 'completed' || event?.status === 'submitted'
@@ -570,6 +617,7 @@ function App() {
                 })}</div></section>
                 <section className="panel embedded-panel"><PanelHeading kicker="VERIFICATION TRAIL" title="Policy evidence" subtitle="Rule outcomes and stated basis." icon="✓" />{workflow.evidence_log.map((item, index) => <div className="evidence-item" key={item.rule + index}><span className="evidence-index">{String(index + 1).padStart(2, '0')}</span><span className="evidence-item-copy"><strong>{item.rule.replaceAll('_', ' ')}</strong><small>{item.outcome} · {item.source_title}</small><small>{item.verbatim_snippet || item.excerpt}</small>{item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">View source</a>}</span></div>)}</section>
                 <AgentInspector workflow={workflow} events={events} />
+                </details>
                 {workflow.can_proceed && <button className="button button-primary full-button" type="button" onClick={() => setActiveStep(4)}>Continue to portal submission</button>}
                 {workflow.application_id && <p className="form-footnote">Mock portal receipt: {workflow.application_id}</p>}
               </>}
@@ -593,7 +641,7 @@ function App() {
           </div>
         </div>
         <footer className="page-footer"><span>GoSolar · Demonstration only</span><span>Not a government service or eligibility determination</span></footer>
-        </> : <section className="tracking-view"><PanelHeading kicker="APPLICATION TRACKING" title="Track your GoSolar application" subtitle="Enter the tracking ID from your submission acknowledgment." icon="T" /><form className="tracking-search" onSubmit={(event) => { event.preventDefault(); void lookupTracking() }}><input aria-label="Tracking ID" value={trackingSearch} onChange={(event) => setTrackingSearch(event.target.value.toUpperCase())} placeholder="SOLAR-MH-2026-894120" /><button className="button button-primary" type="submit">Find application</button></form>{error && <div className="notice notice-warning" role="alert">{error}</div>}{trackingRecord && <ApplicationLifecycleTracker record={trackingRecord} onAdvance={advanceTracking} onReschedule={rescheduleTracking} />}</section>}
+        </> : <section className="tracking-view"><PanelHeading kicker="APPLICATION TRACKING" title="Track your GoSolar application" subtitle="Look up a GoSolar assessment ID or a mock portal submission receipt." icon="T" /><form className="tracking-search" onSubmit={(event) => { event.preventDefault(); void lookupTracking() }}><input aria-label="Tracking ID" value={trackingSearch} onChange={(event) => setTrackingSearch(event.target.value.toUpperCase())} placeholder="GS-2026-12345" /><button className="button button-primary" type="submit">Find application</button></form>{error && <div className="notice notice-warning" role="alert">{error}</div>}{trackingRecord && <ApplicationLifecycleTracker record={trackingRecord} onAdvance={advanceTracking} onReschedule={rescheduleTracking} />}</section>}
       </main>
     </div>
     <SubsidyGuideModal open={guide} onClose={() => setGuide(false)} />
