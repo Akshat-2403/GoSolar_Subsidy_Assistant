@@ -17,7 +17,34 @@ export function validateSanctionedLoad(value: number | string): string | null {
 
 export function validatePositiveNumber(value: number | string, label: string): string | null {
   const number = Number(value)
-  if (!Number.isFinite(number) || number <= 0) return `${label} must be greater than 0.`
+  if (value === '' || !Number.isFinite(number) || number <= 0) return `${label} is required and must be greater than 0.`
+  return null
+}
+
+export function validateRoofCapacity(capacity: number | string, roofArea: number | string): string | null {
+  const proposedKw = Number(capacity)
+  const areaSqft = Number(roofArea)
+  if (capacity === '' || !Number.isFinite(proposedKw) || proposedKw <= 0) return 'Proposed capacity is required.'
+  if (roofArea === '' || !Number.isFinite(areaSqft) || areaSqft <= 0) return 'Usable roof area is required.'
+  if (proposedKw * 100 > areaSqft) return `⚠️ Insufficient roof area. Your roof can only support up to ${(areaSqft / 100).toFixed(2)} kW.`
+  return null
+}
+
+export function validateCapacityAgainstLoad(capacity: number | string, sanctionedLoad: number | string): string | null {
+  const proposedKw = Number(capacity)
+  const loadKw = Number(sanctionedLoad)
+  if (capacity === '' || !Number.isFinite(proposedKw) || proposedKw <= 0) return 'Proposed capacity is required.'
+  if (sanctionedLoad === '' || !Number.isFinite(loadKw) || loadKw <= 0) return 'Sanctioned load is required.'
+  if (proposedKw > loadKw) return '⚠️ Proposed capacity cannot exceed your sanctioned grid load. Please reduce capacity or apply for load enhancement first.'
+  return null
+}
+
+export function validateUsageFeasibility(monthlyUsage: number | string, capacity: number | string): string | null {
+  if (monthlyUsage === '' || capacity === '') return null
+  const usage = Number(monthlyUsage)
+  const proposedKw = Number(capacity)
+  if (!Number.isFinite(usage) || !Number.isFinite(proposedKw)) return null
+  if (usage < 50 && proposedKw >= 5) return '⚠️ Anomaly detected: Your requested system size is vastly oversized for your monthly consumption. Proceed with caution.'
   return null
 }
 

@@ -18,7 +18,7 @@ import type { BillExtraction } from './utils/billParser'
 import type { SubsidyItem, TrackingRecord, VendorItem } from './types/journey'
 import { openFeasibilityProposal } from './utils/proposalExport'
 import { evaluateOfficialBenchmark, OFFICIAL_BENCHMARKS, type BenchmarkResult, type OfficialBenchmark } from './utils/benchmarks'
-import { validateConsumerNumber, validateMobile, validatePincode, validatePositiveNumber, validateSanctionedLoad } from './utils/validation'
+import { validateCapacityAgainstLoad, validateConsumerNumber, validateMobile, validatePincode, validatePositiveNumber, validateRoofCapacity, validateSanctionedLoad, validateUsageFeasibility } from './utils/validation'
 import { createTrackingId, getApplication, saveApplication, type SolarApplication } from './utils/applicationStore'
 import './App.css'
 import './journey.css'
@@ -179,7 +179,9 @@ function App() {
   const [uploadedDocuments, setUploadedDocuments] = useState<UploadedDocuments>(draft?.uploadedDocuments ?? { bill: null, ownership: null, governmentId: null })
   const [estimateOpen, setEstimateOpen] = useState(false)
   const [auditState, setAuditState] = useState<'pending' | 'running' | 'passed' | 'failed'>('pending')
-    const [benchmarkResult, setBenchmarkResult] = useState<BenchmarkResult | null>(null)
+  const [benchmarkResult, setBenchmarkResult] = useState<BenchmarkResult | null>(null)
+  const [benchmarkExplainer, setBenchmarkExplainer] = useState<OfficialBenchmark | null>(null)
+  const [logoFailed, setLogoFailed] = useState(false)
   const activeWorkflowId = workflow?.workflow_id
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -273,17 +275,23 @@ function App() {
     load: validateSanctionedLoad(form.sanctioned_load_kw),
     pin: validatePincode(form.pincode),
     mobile: validateMobile(form.mobile),
-    monthly: validatePositiveNumber(form.monthly_units, 'Monthly units'),
-    roof: validatePositiveNumber(form.roof_area_sqft, 'Roof area'),
-    capacity: Number(form.proposed_capacity_kw) > Number(form.sanctioned_load_kw)
-      ? `Load enhancement required: planned capacity exceeds the ${form.sanctioned_load_kw} kW sanctioned load.`
-      : Number(form.proposed_capacity_kw) > Number(form.roof_area_sqft) / 100
-        ? `Roof-area limit is ${(Number(form.roof_area_sqft) / 100).toFixed(2)} kW at 100 sq. ft. per kW.`
-        : validatePositiveNumber(form.proposed_capacity_kw, 'Planned capacity'),
+    monthly: validatePositiveNumber(form.monthly_units, 'Monthly usage'),
+    roof: validatePositiveNumber(form.roof_area_sqft, 'Usable roof area'),
+    capacity: validatePositiveNumber(form.proposed_capacity_kw, 'Proposed capacity')
+      || validateCapacityAgainstLoad(form.proposed_capacity_kw, form.sanctioned_load_kw)
+      || validateRoofCapacity(form.proposed_capacity_kw, form.roof_area_sqft),
     tariff: validatePositiveNumber(form.tariff_inr_per_kwh, 'Tariff'),
+    state: form.state ? null : 'State is required to identify the electricity provider.',
+    discom: form.discom_code ? null : 'DISCOM is required to verify your connection.',
+    address: form.address.trim() ? null : 'Installation address is required.',
+    ownership: form.owns_rooftop ? null : 'Rooftop ownership must be established to proceed.',
+    grid: form.has_grid_connection ? null : 'An active grid connection is required.',
+    roofClearance: form.roof_shadow_clearance_declared ? null : 'Confirm usable roof and shade conditions before proceeding.',
+    cfa: form.no_prior_cfa_claim ? null : 'Confirm that no prior central financial assistance has been claimed.',
+    usageAnomaly: validateUsageFeasibility(form.monthly_units, form.proposed_capacity_kw),
   }
   const stepTwoValid = !validation.monthly && !validation.roof && !validation.capacity && !validation.tariff
-  const stepOneValid = !validation.name && !validation.consumer && !validation.load && !validation.pin && !validation.mobile && !!form.state && !!form.discom_code && stepTwoValid && consumerVerification === 'verified' && form.owns_rooftop && form.no_prior_cfa_claim
+  const stepOneValid = !validation.name && !validation.consumer && !validation.load && !validation.pin && !validation.mobile && !validation.state && !validation.discom && !validation.address && !validation.ownership && !validation.grid && !validation.roofClearance && !validation.cfa && stepTwoValid && consumerVerification === 'verified' && form.owns_rooftop && form.no_prior_cfa_claim
   const baseFinancialEstimate = Number(form.monthly_units) > 0 && Number(form.sanctioned_load_kw) > 0 && Number(form.tariff_inr_per_kwh) > 0
     ? calculateSolarFinancials({ monthlyUnits: Number(form.monthly_units), sanctionedLoadKw: Number(form.sanctioned_load_kw), roofAreaSqft: Number(form.roof_area_sqft), proposedCapacityKw: Number(form.proposed_capacity_kw), tariffInrPerKwh: Number(form.tariff_inr_per_kwh) }, interestRatePct, loanTenureYears)
     : null
@@ -501,9 +509,16 @@ function App() {
   async function runOfficialScenario(benchmark: OfficialBenchmark) {
     const nextForm = { ...defaults, ...benchmark.form }
     setCurrentView('assessment'); setForm(nextForm); setSelectedSubsidyId('pm-surya-ghar'); setSelectedVendorId('waaree-eco')
-    setConsumerGroup('residential'); setActiveStep(3); setWorkflow(null); setEvents([]); setBenchmarkResult(null)
+    setConsumerGroup('residential'); setActiveStep(benchmark.id === 'TC5' || benchmark.id === 'TC6' ? 1 : 3); setWorkflow(null); setEvents([]); setBenchmarkResult(null)
     setOfflinePreview(false); setOfflineAvailable(false); setError(''); setBusy(true)
     const now = new Date().toISOString()
+    if (benchmark.id === 'TC5' || benchmark.id === 'TC6') {
+      const result = evaluateOfficialBenchmark(benchmark)
+      setBenchmarkResult(result)
+      setEvents([{ node: 'client_feasibility_guard', status: result.passed ? 'blocked' : 'failed', message: result.evidence, timestamp: now }])
+      setBusy(false)
+      return
+    }
     if (benchmark.id === 'TC4') {
       const result = evaluateOfficialBenchmark(benchmark)
       setBenchmarkResult(result)
@@ -565,6 +580,7 @@ function App() {
     }
   }
   function continueFromStepOne() { if (stepOneValid) { setError(''); setActiveStep(2) } else setError('Please resolve the highlighted Step 1 fields before continuing.') }
+  function presentBenchmark(benchmark: OfficialBenchmark) { setBenchmarkExplainer(benchmark) }
   async function runPolicyAudit() {
     if (auditState === 'running') return
     if (!stepOneValid || !uploadedDocuments.bill) { setError('Complete the Step 1 declarations and upload the required Electricity Bill before running the audit.'); setAuditState('failed'); return }
@@ -620,13 +636,13 @@ function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">☼</div><div><strong>GoSolar<span>.</span></strong><small>SUBSIDY ASSISTANT</small></div></div>
+      <div className="brand"><div className="brand-mark">{!logoFailed && <img src="/Logo/logo.svg" alt="" onError={() => setLogoFailed(true)} />}{logoFailed && <span aria-hidden="true">☼</span>}</div><div><strong>GoSolar<span>.</span></strong><small>SUBSIDY ASSISTANT</small></div></div>
       <div className="workspace-label">YOUR APPLICATION</div>
       {currentView === 'assessment' ? <ProgressBar activeStep={activeStep} /> : <div className="sidebar-track-label">Application tracking</div>}
       <div className="sidebar-bottom"><div className="system-card"><span className="status-dot" /><div><strong>Demo services</strong><small>Agent API - mock portal</small></div></div><div className="profile"><div className="avatar">GS</div><div><strong>GoSolar workspace</strong><small>Human approval enabled</small></div></div></div>
     </aside>
     <div className="main-area">
-      <header className="topbar"><div className="topbar-spacer" /><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>&#9889; New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>&#128205; Track Application</button></div><div className="topbar-actions"><details className="benchmark-menu"><summary className="button button-outline">Benchmarks</summary><div className="benchmark-options" role="menu" aria-label="Official benchmark scenarios">{OFFICIAL_BENCHMARKS.map((item) => <button className="button button-quiet" key={item.id} type="button" role="menuitem" disabled={busy} onClick={(event) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; void runOfficialScenario(item) }}><strong>{item.id} - {item.title}</strong><small>Expected: {item.expected}</small></button>)}</div></details><button className="button button-outline header-action" type="button" onClick={() => { startNew(); setCurrentView('assessment') }}><span aria-hidden="true">&#8635;</span>Start Over</button><button className="button button-quiet header-action" type="button" onClick={useDemo}>&#9889; Try Demo</button><button className="button button-quiet header-action" type="button" onClick={() => setPortalOpen(true)}>Mock Portal</button><ThemeToggle mode={theme} onChange={setTheme} /></div></header>
+      <header className="topbar"><div className="topbar-spacer" /><div className="app-view-switcher" role="group" aria-label="GoSolar workspace view"><button type="button" aria-pressed={currentView === 'assessment'} className={currentView === 'assessment' ? 'active' : ''} onClick={() => setCurrentView('assessment')}>&#9889; New Assessment</button><button type="button" aria-pressed={currentView === 'tracking'} className={currentView === 'tracking' ? 'active' : ''} onClick={() => setCurrentView('tracking')}>&#128205; Track Application</button></div><div className="topbar-actions"><details className="benchmark-menu"><summary className="button button-outline">Benchmarks · 6</summary><div className="benchmark-options" role="menu" aria-label="Official benchmark scenarios">{OFFICIAL_BENCHMARKS.map((item) => <button className="button button-quiet" key={item.id} type="button" role="menuitem" disabled={busy} onClick={(event) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; presentBenchmark(item) }}><strong>{item.id} · {item.title} {item.optional && <span className="optional-badge">Optional</span>}</strong><small>Expected: {item.expected}</small></button>)}</div></details><button className="button button-outline header-action" type="button" onClick={() => { startNew(); setCurrentView('assessment') }}><span aria-hidden="true">&#8635;</span>Start Over</button><button className="button button-quiet header-action" type="button" onClick={useDemo}>&#9889; Try Demo</button><button className="button button-quiet header-action" type="button" onClick={() => setPortalOpen(true)}>Mock Portal</button><ThemeToggle mode={theme} onChange={setTheme} /></div></header>
       <main className="page-content">
         {currentView === 'assessment' ? <>
         <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ROOFTOP SOLAR · PERSONALIZED ESTIMATE</div><h1>Plan your <span>solar journey</span></h1><p>Share a few details to explore your rooftop potential and available subsidy estimate.</p></div><div className="heading-actions"><button className="button button-outline estimate-trigger" type="button" aria-expanded={estimateOpen} onClick={() => setEstimateOpen((open) => !open)}>{estimateOpen ? 'Hide' : 'View'} Live Estimate</button><button className="button button-outline" type="button" onClick={() => setGuide(true)}>Learn about subsidies</button></div></div>
@@ -641,15 +657,16 @@ function App() {
               <BillUpload key={billUploadKey} endpoint={BILL_OCR_URL} onExtracted={applyBillExtraction} />
               <DocumentUploads value={uploadedDocuments} onChange={(documents) => { setUploadedDocuments(documents); setDraftCleared(false); setAuditState('pending') }} />
               <form onSubmit={(event) => { event.preventDefault(); continueFromStepOne() }} noValidate>
-                <Field label="Applicant name"><input autoComplete="name" value={form.applicant_name} onChange={(event) => update('applicant_name', event.target.value)} placeholder="e.g. Asha Sharma" aria-invalid={!!validation.name} />{form.applicant_name && validation.name && <small className="field-error">{validation.name}</small>}</Field>
+                {benchmarkResult && <BenchmarkResultCard result={benchmarkResult} />}
+                <Field label="Applicant name"><input autoComplete="name" value={form.applicant_name} onChange={(event) => update('applicant_name', event.target.value)} placeholder="e.g. Asha Sharma" aria-invalid={!!validation.name} />{validation.name && <small className="field-error">{validation.name}</small>}</Field>
                 <div className="form-grid">
-                  <Field label="State"><select value={form.state} onChange={(event) => update('state', event.target.value)}><option value="">Select your state / UT</option>{stateNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>{!form.state && <small>Select a state to see its DISCOMs.</small>}</Field>
-                  <Field label="DISCOM / electricity provider"><select value={form.discom_code} onChange={(event) => update('discom_code', event.target.value)} disabled={!form.state}><option value="">Select your DISCOM</option>{discomOptions.map((name) => <option key={name} value={name}>{name}</option>)}</select></Field>
-                  <Field label="Consumer / CA number"><input autoComplete="off" value={form.consumer_number} onChange={(event) => update('consumer_number', event.target.value.replace(/\s/g, '').toUpperCase())} placeholder="8–15 letters or digits" aria-invalid={!!form.consumer_number && !!validation.consumer} />{form.consumer_number && validation.consumer && <small className="field-error">{validation.consumer}</small>}</Field>
+                  <Field label="State"><select value={form.state} onChange={(event) => update('state', event.target.value)} aria-invalid={!!validation.state}><option value="">Select your state / UT</option>{stateNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>{validation.state && <small className="field-error">{validation.state}</small>}</Field>
+                  <Field label="DISCOM / electricity provider"><select value={form.discom_code} onChange={(event) => update('discom_code', event.target.value)} disabled={!form.state} aria-invalid={!!validation.discom}><option value="">Select your DISCOM</option>{discomOptions.map((name) => <option key={name} value={name}>{name}</option>)}</select>{validation.discom && <small className="field-error">{validation.discom}</small>}</Field>
+                  <Field label="Consumer / CA number"><input autoComplete="off" value={form.consumer_number} onChange={(event) => update('consumer_number', event.target.value.replace(/\s/g, '').toUpperCase())} placeholder="8–15 letters or digits" aria-invalid={!!validation.consumer} />{validation.consumer && <small className="field-error">{validation.consumer}</small>}</Field>
                   <Field label="Sanctioned load (kW)"><input type="number" min="0.5" max="50" step="0.1" value={form.sanctioned_load_kw} onChange={(event) => update('sanctioned_load_kw', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.load} />{validation.load && <small className="field-error">{validation.load}</small>}</Field>
-                  <Field label="Pincode"><input inputMode="numeric" autoComplete="postal-code" maxLength={6} value={form.pincode} onChange={(event) => update('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit PIN code" aria-invalid={!!form.pincode && !!validation.pin} />{form.pincode && validation.pin && <small className="field-error">{validation.pin}</small>}</Field>
-                  <Field label="Mobile number"><input inputMode="numeric" autoComplete="tel-national" maxLength={10} value={form.mobile} onChange={(event) => update('mobile', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile number" aria-invalid={!!form.mobile && !!validation.mobile} />{form.mobile && validation.mobile && <small className="field-error">{validation.mobile}</small>}</Field>
-                  <Field label="Installation address (for the demo record)"><input autoComplete="street-address" value={form.address} onChange={(event) => update('address', event.target.value)} placeholder="Street, locality, city" /></Field>
+                  <Field label="Pincode"><input inputMode="numeric" autoComplete="postal-code" maxLength={6} value={form.pincode} onChange={(event) => update('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit PIN code" aria-invalid={!!validation.pin} />{validation.pin && <small className="field-error">{validation.pin}</small>}</Field>
+                  <Field label="Mobile number"><input inputMode="numeric" autoComplete="tel-national" maxLength={10} value={form.mobile} onChange={(event) => update('mobile', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile number" aria-invalid={!!validation.mobile} />{validation.mobile && <small className="field-error">{validation.mobile}</small>}</Field>
+                  <Field label="Installation address (for the demo record)"><input autoComplete="street-address" value={form.address} onChange={(event) => update('address', event.target.value)} placeholder="Street, locality, city" aria-invalid={!!validation.address} />{validation.address && <small className="field-error">{validation.address}</small>}</Field>
                 </div>
                 <section className="consumer-verification" aria-live="polite">
                   <div><strong>Consumer connection verification</strong><small>Confirm the account is active with the selected DISCOM.</small></div>
@@ -657,7 +674,7 @@ function App() {
                   {consumerVerification === 'verified' && <p className="verification-success">✓ Consumer Verified: Active Domestic Connection (Sanctioned Load: {form.sanctioned_load_kw} kW)</p>}
                 </section>
               <div className="form-grid">
-                <Field label="Average monthly consumption (kWh)"><input type="number" min="1" step="1" value={form.monthly_units} onChange={(event) => update('monthly_units', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.monthly} />{validation.monthly && <small className="field-error">{validation.monthly}</small>}</Field>
+                <Field label="Average monthly consumption (kWh)"><input type="number" min="1" step="1" value={form.monthly_units} onChange={(event) => update('monthly_units', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.monthly} />{validation.monthly && <small className="field-error">{validation.monthly}</small>}{validation.usageAnomaly && <small className="field-warning" role="alert">{validation.usageAnomaly}</small>}</Field>
                 <Field label="Usable roof area (sq. ft.)"><input type="number" min="1" step="1" value={form.roof_area_sqft} onChange={(event) => update('roof_area_sqft', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.roof} />{validation.roof && <small className="field-error">{validation.roof}</small>}</Field>
                 <Field label="Planned system capacity (kW)"><input type="number" min="0.1" step="0.1" value={form.proposed_capacity_kw} onChange={(event) => update('proposed_capacity_kw', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.capacity} />{validation.capacity && <small className="field-error">{validation.capacity}</small>}</Field>
                 <Field label="Electricity tariff (₹ / kWh)"><input type="number" min="0.1" step="0.1" value={form.tariff_inr_per_kwh} onChange={(event) => update('tariff_inr_per_kwh', event.target.value === '' ? '' : Number(event.target.value))} aria-invalid={!!validation.tariff} />{validation.tariff && <small className="field-error">{validation.tariff}</small>}</Field>
@@ -666,10 +683,11 @@ function App() {
               </div>
               <RoofVisualizer roofAreaSqft={form.roof_area_sqft} systemCapacityKw={estimatedSize} />
               <div className="form-section-title">PROJECT DETAILS</div>
-              <label className="check-line"><input type="checkbox" checked={form.owns_rooftop} onChange={(event) => update('owns_rooftop', event.target.checked)} /> I confirm ownership or a valid lease for the installation premises.</label>
+              <label className="check-line"><input type="checkbox" checked={form.owns_rooftop} onChange={(event) => update('owns_rooftop', event.target.checked)} /> I confirm ownership or a valid lease for the installation premises.</label>{validation.ownership && <small className="field-error check-error">{validation.ownership}</small>}
               <label className="check-line"><input type="checkbox" checked={form.no_prior_cfa_claim} onChange={(event) => update('no_prior_cfa_claim', event.target.checked)} /> I declare that no prior central financial assistance (CFA) was claimed for this consumer meter.</label>
-              <label className="check-line"><input type="checkbox" checked={form.has_grid_connection} onChange={(event) => update('has_grid_connection', event.target.checked)} /> Active grid connection</label>
-              <label className="check-line"><input type="checkbox" checked={form.roof_shadow_clearance_declared} onChange={(event) => update('roof_shadow_clearance_declared', event.target.checked)} /> I declare that the usable roof has no significant shade obstruction (site survey still required)</label>
+              {validation.cfa && <small className="field-error check-error">{validation.cfa}</small>}
+              <label className="check-line"><input type="checkbox" checked={form.has_grid_connection} onChange={(event) => update('has_grid_connection', event.target.checked)} /> Active grid connection</label>{validation.grid && <small className="field-error check-error">{validation.grid}</small>}
+              <label className="check-line"><input type="checkbox" checked={form.roof_shadow_clearance_declared} onChange={(event) => update('roof_shadow_clearance_declared', event.target.checked)} /> I declare that the usable roof has no significant shade obstruction (site survey still required)</label>{validation.roofClearance && <small className="field-error check-error">{validation.roofClearance}</small>}
               {form.applicant_type === 'tenant' && <label className="check-line"><input type="checkbox" checked={form.landlord_noc_uploaded} onChange={(event) => update('landlord_noc_uploaded', event.target.checked)} /> Landlord NOC recorded</label>}
                 <div className="wizard-actions"><button className="button button-quiet" type="button" onClick={useDemo}>⚡ Try Demo / Pre-fill Data</button><button className="button button-primary" type="submit" disabled={!stepOneValid || !uploadedDocuments.bill}>Proceed to Subsidy Selection →</button></div>
               </form>
@@ -741,6 +759,7 @@ function App() {
     </div>
     <SubsidyGuideModal open={guide} onClose={() => setGuide(false)} />
     {portalOpen && <MockDiscomPortalModal open={portalOpen} consumer={portalConsumer} auditPassed={auditState === 'passed'} onClose={() => setPortalOpen(false)} />}
+    {benchmarkExplainer && <div className="benchmark-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setBenchmarkExplainer(null) }}><section className="benchmark-explainer" role="dialog" aria-modal="true" aria-labelledby="benchmark-explainer-title"><div className="benchmark-explainer-heading"><div><span className="section-kicker">{benchmarkExplainer.optional ? 'OPTIONAL GUARDRAIL' : 'OFFICIAL HACKATHON SCENARIO'}</span><h2 id="benchmark-explainer-title">{benchmarkExplainer.id} · {benchmarkExplainer.title}</h2></div><button className="icon-button" type="button" aria-label="Close scenario explanation" onClick={() => setBenchmarkExplainer(null)}>×</button></div><dl><div><dt>What this tests</dt><dd>{benchmarkExplainer.what}</dd></div><div><dt>How it works</dt><dd>{benchmarkExplainer.how}</dd></div><div><dt>Where details are put</dt><dd>{benchmarkExplainer.where}</dd></div><div><dt>Expected result</dt><dd>{benchmarkExplainer.expected}</dd></div></dl><p className="journey-disclaimer">Uses synthetic demo inputs. This scenario never files with a live government service.</p><div className="benchmark-explainer-actions"><button className="button button-quiet" type="button" onClick={() => setBenchmarkExplainer(null)}>Cancel</button><button className="button button-primary" type="button" onClick={() => { const selected = benchmarkExplainer; setBenchmarkExplainer(null); void runOfficialScenario(selected) }}>Fill demo and run check</button></div></section></div>}
   </div>
 }
 
@@ -748,4 +767,7 @@ function PanelHeading({ kicker, title, subtitle, icon }: { kicker: string; title
   return <div className="panel-heading"><div><div className="section-kicker">{kicker}</div><h2>{title}</h2><p>{subtitle}</p></div><div className="step-icon">{icon}</div></div>
 }
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label> }
+function BenchmarkResultCard({ result }: { result: BenchmarkResult }) {
+  return <div className="benchmark-result" role="status"><div className="benchmark-result-heading"><strong>{result.id} · {result.actual}</strong><b className={result.passed ? 'benchmark-pass' : 'benchmark-fail'}>{result.passed ? '✓ GUARDRAIL PASSED' : '✕ MISMATCH'}</b></div><p>Expected: {result.expected} · Actual: {result.actual}</p><small>{result.evidence}</small></div>
+}
 export default App
