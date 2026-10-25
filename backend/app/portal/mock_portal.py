@@ -24,9 +24,11 @@ class PortalApplication(BaseModel):
     sanctioned_load_kw: float = Field(gt=0, le=1000)
     vendor_id: str
     vendor_empanelled: bool
+    submission_key: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 _records: dict[str, dict] = {}
+_submission_keys: dict[str, str] = {}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -75,6 +77,10 @@ def create_application(request: PortalApplication):
         raise HTTPException(status_code=422, detail="Planned capacity exceeds sanctioned load.")
     if not request.vendor_empanelled:
         raise HTTPException(status_code=422, detail="Vendor is not empanelled.")
+    if request.submission_key:
+        existing_id = _submission_keys.get(request.submission_key)
+        if existing_id and existing_id in _records:
+            return _records[existing_id]
     application_id = f"APP-SOL-2026-{uuid4().hex[:5].upper()}"
     record = {
         **request.model_dump(),
@@ -83,6 +89,8 @@ def create_application(request: PortalApplication):
         "received_at": datetime.now(timezone.utc).isoformat(),
     }
     _records[application_id] = record
+    if request.submission_key:
+        _submission_keys[request.submission_key] = application_id
     return record
 
 

@@ -4,13 +4,13 @@
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
-      MOCK_PORTAL_URL: http://mock-discom:10000
-      PORT: "8000"
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      MOCK_PORTAL_URL: http://mock-discom:${PORTAL_CONTAINER_PORT:-10000}
+      PORT: ${BACKEND_CONTAINER_PORT:-8000}
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:${BACKEND_CONTAINER_PORT:-8000}"
     expose:
-      - "8000"
+      - "${BACKEND_CONTAINER_PORT:-8000}"
     depends_on:
       - mock-discom
 
@@ -18,11 +18,11 @@
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: ["uvicorn", "app.portal.mock_portal:app", "--host", "0.0.0.0", "--port", "10000"]
+    command: ["sh", "-c", "uvicorn app.portal.mock_portal:app --host 0.0.0.0 --port $$PORT"]
     environment:
-      PORT: "10000"
+      PORT: ${PORTAL_CONTAINER_PORT:-10000}
     expose:
-      - "10000"
+      - "${PORTAL_CONTAINER_PORT:-10000}"
 
   frontend:
     build:
@@ -31,8 +31,12 @@
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
         VITE_PORTAL_URL: ${VITE_PORTAL_URL:-/api/mock-discom/portal}
+    environment:
+      BACKEND_CONTAINER_PORT: ${BACKEND_CONTAINER_PORT:-8000}
+      FRONTEND_CONTAINER_PORT: ${FRONTEND_CONTAINER_PORT:-80}
+      NGINX_ENVSUBST_FILTER: ^(BACKEND_CONTAINER_PORT|FRONTEND_CONTAINER_PORT)$
     ports:
-      - "5173:80"
+      - "${FRONTEND_HOST_PORT:-5173}:${FRONTEND_CONTAINER_PORT:-80}"
     depends_on:
       - backend
 
