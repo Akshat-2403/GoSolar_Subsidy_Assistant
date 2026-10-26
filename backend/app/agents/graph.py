@@ -10,12 +10,43 @@ from app.agents.state import AgentWorkflowState
 
 
 def _evaluate_node(state: AgentWorkflowState) -> dict[str, Any]:
-    from app.schemas.workflow import WorkflowRequest
+    from app.schemas.workflow import WorkflowEvent, WorkflowRequest
     from app.services.workflow import _evaluate_workflow_core
 
     request = WorkflowRequest.model_validate(state["request_data"])
     result = _evaluate_workflow_core(request, state["workflow_id"])
+    reports = state.get("agent_reports", {})
+    agent_events = [WorkflowEvent(node=f"agent_{name}", status="completed", message="Specialist assessment completed; see its structured agent report for scope and outcome.", timestamp=datetime.now(timezone.utc).isoformat()) for name in ("supervisor", "grid_feasibility", "subsidy_optimizer", "policy_compliance")]
+    updates: dict[str, Any] = {"agent_reports": reports, "events": [*result.events, *agent_events]}
+    grid_checks = reports.get("grid_feasibility", {}).get("checks", {})
+    if grid_checks.get("distribution_transformer") == "pending_discom_study" and grid_checks.get("transformer_loading_pct") is not None:
+        updates.update({"state": "pending_discom_study", "can_proceed": False, "human_approval_required": False,
+                        "issues": [*result.issues, "Distribution transformer capacity requires DISCOM technical study; GoSolar does not infer capacity clearance."]})
+        updates["events"].append(WorkflowEvent(node="distribution_transformer_review", status="blocked", message="Feeder/transformer clearance is pending DISCOM study; the 40% threshold is a demo screening assumption, not a verified legal approval rule.", timestamp=datetime.now(timezone.utc).isoformat()))
+    result = result.model_copy(update=updates, deep=True)
     return {"workflow_data": result.model_dump(mode="json")}
+
+
+def _specialist_node(name: str):
+    def run(state: AgentWorkflowState) -> dict[str, Any]:
+        from app.agents import grid_feasibility_agent, policy_compliance_agent, subsidy_optimizer_agent
+        from app.schemas.workflow import WorkflowRequest
+
+        request = WorkflowRequest.model_validate(state["request_data"])
+        assessors = {
+            "grid_feasibility": grid_feasibility_agent.assess,
+            "subsidy_optimizer": subsidy_optimizer_agent.assess,
+            "policy_compliance": policy_compliance_agent.assess,
+        }
+        return {"agent_reports": {name: assessors[name](request)}}
+    return run
+
+
+def _supervisor_node(state: AgentWorkflowState) -> dict[str, Any]:
+    from app.agents.supervisor import route
+    # The supervisor selects the three domain specialists for this application.
+    selected = route(state["request_data"])
+    return {"agent_reports": {"supervisor": {"agent": "supervisor", **selected}}}
 
 
 def _retrieve_evidence_node(state: AgentWorkflowState) -> dict[str, Any]:
@@ -102,19 +133,27 @@ def _route_approval(state: AgentWorkflowState) -> str:
 
 def _portal_submission_node(state: AgentWorkflowState) -> dict[str, Any]:
     from app.schemas.workflow import WorkflowResponse
-    from app.services.workflow import _submit_approved_workflow
+    from app.agents.portal_submission_agent import submit_after_human_approval
 
     current = WorkflowResponse.model_validate(state["workflow_data"])
-    updated = _submit_approved_workflow(current)
+    updated = submit_after_human_approval(current)
     return {"workflow_data": updated.model_dump(mode="json")}
 
 
 builder = StateGraph(AgentWorkflowState)
+builder.add_node("supervisor", _supervisor_node)
+builder.add_node("grid_feasibility_agent", _specialist_node("grid_feasibility"))
+builder.add_node("subsidy_optimizer_agent", _specialist_node("subsidy_optimizer"))
+builder.add_node("policy_compliance_agent", _specialist_node("policy_compliance"))
 builder.add_node("evaluate", _evaluate_node)
 builder.add_node("policy_evidence", _retrieve_evidence_node)
 builder.add_node("human_review", _human_review_node)
 builder.add_node("portal_submission", _portal_submission_node)
-builder.add_edge(START, "evaluate")
+builder.add_edge(START, "supervisor")
+builder.add_edge("supervisor", "grid_feasibility_agent")
+builder.add_edge("grid_feasibility_agent", "subsidy_optimizer_agent")
+builder.add_edge("subsidy_optimizer_agent", "policy_compliance_agent")
+builder.add_edge("policy_compliance_agent", "evaluate")
 builder.add_edge("evaluate", "policy_evidence")
 builder.add_conditional_edges("policy_evidence", _route_evaluation)
 builder.add_conditional_edges("human_review", _route_approval)

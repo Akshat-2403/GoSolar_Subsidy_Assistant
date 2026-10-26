@@ -7,6 +7,7 @@ from app.api.applications import router as applications_router
 from app.api.journey import router as journey_router
 from app.api.mock_discom import router as mock_discom_router
 from app.api.workflow import router as workflows_router
+from app.api.benchmark import router as benchmark_router
 
 
 app = FastAPI(
@@ -36,6 +37,7 @@ app.include_router(applications_router)
 app.include_router(journey_router)
 app.include_router(mock_discom_router)
 app.include_router(workflows_router)
+app.include_router(benchmark_router)
 
 
 @app.get("/")

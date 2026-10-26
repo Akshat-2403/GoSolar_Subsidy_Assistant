@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 
 WorkflowState = Literal[
     "pending_items",
+    "pending_discom_study",
     "vendor_warning",
     "consent_needed",
     "human_review_required",
@@ -33,6 +34,7 @@ class WorkflowRequest(BaseModel):
     average_cost_per_kw: float = Field(default=60000.0, gt=0, le=10000000)
     monthly_avg_consumption_kwh: float | None = Field(default=None, gt=0)
     rooftop_area_sqft: float | None = Field(default=None, gt=0)
+    transformer_loading_pct: float | None = Field(default=None, ge=0, le=100)
 
     @field_validator("consumer_number")
     @classmethod
@@ -83,3 +85,4 @@ class WorkflowResponse(BaseModel):
     financial_summary: FinancialSummary | None = None
     application_id: str | None = None
     policy_assessment: str | None = None
+    agent_reports: dict[str, dict[str, Any]] = Field(default_factory=dict)

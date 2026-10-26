@@ -53,31 +53,39 @@ uv run --project backend --group dev python scripts/run_benchmarks.py
 
 ## How the agent works
 
-The backend uses a **single LangGraph workflow** with deterministic policy checks, local policy retrieval, and a human approval interrupt. It is not presented as a multi-agent system.
+LangGraph runs an explicit supervisor and three domain specialists in sequence. Each specialist emits a structured report; the shared workflow reconciles their findings and pauses at a human approval gate. These are bounded deterministic agents, not autonomous LLM agents.
 
 ```mermaid
 flowchart LR
   H[Homeowner / reviewer] --> UI[React + TypeScript SPA]
   UI -->|Assessment and review| API[FastAPI]
   UI --> LS[(Browser localStorage)]
-  API --> WF[LangGraph workflow]
-  WF --> V[Schema and feasibility checks]
-  V --> R[Policy and vendor conditions]
-  R --> E[Curated policy evidence with source links]
-  E --> F[Indicative financial calculation]
-  F --> A{Human approval}
-  A -->|Approved demo action| MP[Mock DISCOM portal]
+  API --> WF[LangGraph supervisor]
+  WF --> G[Grid feasibility agent]
+  G --> F[Subsidy optimizer agent]
+  F --> P[Policy compliance agent]
+  P --> E[Evidence and workflow reconciliation]
+  E --> A{Human approval}
+  A -->|Approved demo action| PA[Portal submission agent]
+  PA --> MP[Mock DISCOM portal]
   MP --> ID[Simulated receipt ID]
   ID --> Q[Independent receipt lookup]
   Q --> UI
 ```
 
-1. **Validate:** Pydantic validates API payloads; workflow rules inspect ownership, grid connection, capacity, vendor, consent, and documents.
-2. **Retrieve:** a local, curated source snapshot supplies policy passages with source URLs and retrieval timestamps. The core retrieval path does not require a hosted embedding service.
-3. **Explain:** the UI exposes reasons, evidence, events, and unresolved items.
-4. **Pause:** LangGraph waits for an explicit human decision before the simulated portal action.
-5. **Act and verify:** the mock portal returns a synthetic receipt; a separate lookup checks that receipt. Retry keys prevent duplicate mock receipts.
+1. **Trigger and route:** a validated assessment enters the supervisor, which selects grid, subsidy, and policy specialists.
+2. **Assess:** grid checks compare declared roof area and sanctioned load, subsidy logic estimates assistance, and policy checks inspect consent, vendor declarations, and documents.
+3. **Explain:** the API combines specialist reports with deterministic workflow rules and curated policy passages; the UI exposes reasons, citations, events, and unresolved items.
+4. **Pause:** LangGraph waits for an explicit human decision before the portal specialist can dispatch to the isolated mock portal.
+5. **Act and verify:** the portal submission agent receives a synthetic receipt; a separate lookup verifies it. Retry keys prevent duplicate mock receipts.
 6. **Track locally:** the browser application store keeps GoSolar tracking records in localStorage for that browser.
+
+### Evaluation labels
+
+- **Agentic autonomy:** supervisor routing and bounded specialist assessments; human approval remains required for portal dispatch.
+- **Reliability:** schema gates, deterministic rules, retry/idempotency behavior, and conservative handling of unavailable grid data.
+- **Compliance:** policy evidence is source-linked where available. The app does not claim legal certification or DISCOM clearance.
+- **Audit:** use **Run Architecture Audit & Benchmarks** in the header for five synthetic API cases. Methods, outcomes, and captured test output are in [VERIFICATION_EVIDENCE.md](VERIFICATION_EVIDENCE.md).
 
 Optional Gemini-backed policy reasoning can be enabled with a configured key. The deterministic checks and local retrieval are available without it.
 
@@ -182,6 +190,10 @@ The CI workflow runs frontend type-check/build/lint, backend compile/import chec
 - frontend/src/utils/benchmarks.ts — six UI scenarios and result explanations
 - frontend/src/utils/applicationStore.ts — browser-local GoSolar application store
 - backend/app/agents/graph.py — LangGraph workflow and human approval interrupt
+- backend/app/agents/supervisor.py and *_agent.py — supervisor and specialist assessments
+- backend/app/api/benchmark.py — deterministic benchmark audit endpoint
+- frontend/src/components/BenchmarkDrawer.tsx — in-app benchmark audit panel
+- VERIFICATION_EVIDENCE.md — cases, limits, and captured test output
 - backend/app/services/ — eligibility, workflow, financial calculations, and catalogs
 - backend/app/rag/retriever.py — curated policy sources and retrieval
 - backend/app/portal/mock_portal.py — simulated DISCOM portal
